@@ -587,9 +587,19 @@
 
         function downloadJSON() {
             if (segments.length === 0) { alert("No segments!"); return; }
-            let t1 = document.getElementById('team1Name').value;
-            let t2 = document.getElementById('team2Name').value;
-            let title = "volleyball_highlights";
+            
+            // 1. Get current team names (default to "Home" and "Away" if empty)
+            let t1 = document.getElementById('team1Name').value || "Home";
+            let t2 = document.getElementById('team2Name').value || "Away";
+            
+            // 2. Format names: Trim whitespace and replace spaces with dashes
+            // .trim() removes leading/trailing spaces
+            // .replace(/\s+/g, '-') replaces all internal spaces/tabs with a dash
+            let t1Formatted = t1.trim().replace(/\s+/g, '-');
+            let t2Formatted = t2.trim().replace(/\s+/g, '-');
+            
+            // 3. Construct the filename with "_vs_" separator
+            let title = `${t1Formatted}_vs_${t2Formatted}`;
             
             const data = {
                 videoId: currentVideoId,
@@ -601,7 +611,10 @@
             const blob = new Blob([JSON.stringify(data, null, 2)], {type : 'application/json'});
             const link = document.createElement('a');
             link.href = URL.createObjectURL(blob);
+            
+            // 4. Set the download attribute to the new title
             link.download = `${title}.json`;
+            
             link.click();
         }
     </script>
