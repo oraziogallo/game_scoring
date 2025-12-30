@@ -269,7 +269,7 @@
         
         <div class="video-wrapper">
             <div class="focus-warning">Click video to enable shortcuts</div>
-            <div class="video-container" onclick="refocusApp()">
+            <div class="video-container" id="videoContainer" onclick="refocusApp()">
                 <div id="player"></div> 
                 <video id="localPlayer" controls></video>
             </div>
@@ -320,6 +320,7 @@
         let startTime = null;
         let segments = [];
         let updateInterval;
+        let isMouseDown = false;
         
         // Running Score State
         let currentScore1 = 0;
@@ -361,17 +362,27 @@
         // --- Focus & Init ---
         window.addEventListener('blur', () => document.body.classList.remove('shortcuts-active'));
         window.addEventListener('focus', () => document.body.classList.add('shortcuts-active'));
-        document.addEventListener('click', (e) => {
-            if(e.target.tagName !== 'INPUT' && !e.target.closest('button')) refocusApp();
+        
+        // Track mouse to know when drags end
+        window.addEventListener('mousedown', () => isMouseDown = true);
+        window.addEventListener('mouseup', () => {
+             isMouseDown = false;
+             setTimeout(refocusApp, 50); 
         });
 
-        // NEW: When mouse is released from local video (e.g. after drag), force blur.
-        // This ensures the seek bar doesn't keep focus.
-        localPlayer.addEventListener('mouseup', () => {
-             setTimeout(() => {
-                 localPlayer.blur();
-                 refocusApp();
-             }, 50);
+        // Local Player focus fixes
+        function blurLocalVideo() {
+            if (document.activeElement === localPlayer) {
+                localPlayer.blur();
+                refocusApp(); 
+            }
+        }
+        localPlayer.addEventListener('mouseup', () => setTimeout(blurLocalVideo, 50));
+        localPlayer.addEventListener('click', () => setTimeout(blurLocalVideo, 50));
+        localPlayer.addEventListener('seeked', () => setTimeout(blurLocalVideo, 50));
+
+        document.addEventListener('click', (e) => {
+            if(e.target.tagName !== 'INPUT' && !e.target.closest('button')) refocusApp();
         });
 
         function refocusApp() {
@@ -390,12 +401,14 @@
             player = new YT.Player('player', {
                 height: '100%', width: '100%', videoId: '',
                 events: { 'onReady': onPlayerReady, 'onStateChange': onPlayerStateChange },
-                playerVars: { 'rel': 0, 'modestbranding': 1 }
+                // FIX: disablekb: 1 prevents YouTube from stealing arrow keys for its own seeking
+                playerVars: { 'rel': 0, 'modestbranding': 1, 'disablekb': 1 } 
             });
         }
         function onPlayerReady(event) { updateInterval = setInterval(updateUI, 100); }
         function onPlayerStateChange(event) {
-            if (event.data === YT.PlayerState.PLAYING || event.data === YT.PlayerState.PAUSED) refocusApp();
+            // Refocus whenever state changes (e.g. buffering -> playing)
+            refocusApp();
         }
 
         // --- Loading Logic ---
@@ -458,8 +471,7 @@
             updateScoreDisplay();
         }
 
-        // --- Keyboard Controls (WINDOW LEVEL + CAPTURE + FORCE BLUR) ---
-        // Changed to 'window' to capture events before they reach the video/slider
+        // --- Keyboard Controls ---
         window.addEventListener('keydown', (e) => {
             if (e.target.tagName === 'INPUT' && e.target.type === 'text') return;
 
@@ -470,15 +482,15 @@
             ];
 
             if (customKeys.includes(key)) {
-                // 1. Stop propagation immediately so video slider doesn't get it
+                // Prevent bubbling if focused on local player
+                if (e.target === localPlayer) {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    blurLocalVideo();
+                }
+
                 e.preventDefault();
                 e.stopImmediatePropagation();
-
-                // 2. Extra safety: If video is somehow focused, blur it now.
-                if (document.activeElement === localPlayer) {
-                    localPlayer.blur();
-                    document.body.focus();
-                }
 
                 switch (key) {
                     case ' ': case 'k': 
@@ -605,6 +617,14 @@
         function updateUI() {
             const t = playback.getTime();
             document.getElementById('currentTime').innerText = formatTime(t);
+
+            // FIX: Aggressively steal focus from YouTube iframe if video is Playing.
+            // This ensures controls work immediately after a scrub+release.
+            if (currentMode === 'youtube' && player && player.getPlayerState) {
+                if (player.getPlayerState() === YT.PlayerState.PLAYING && document.activeElement.tagName === 'IFRAME') {
+                    refocusApp();
+                }
+            }
         }
 
         function updateScoreDisplay() {
