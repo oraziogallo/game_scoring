@@ -1,0 +1,740 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Volleyball Video Scorer + Local Support</title>
+    <style>
+        :root {
+            --bg-color: #1a1a1a;
+            --text-color: #e0e0e0;
+            --accent: #e67e22; /* Orange for Volleyball vibe */
+            --team1-color: #3498db;
+            --team2-color: #e74c3c;
+            --panel-bg: #2d2d2d;
+            --btn-local: #d27b1a; 
+        }
+
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+            background-color: var(--bg-color);
+            color: var(--text-color);
+            margin: 0;
+            padding: 20px;
+            display: flex;
+            flex-direction: column;
+            height: 100vh;
+            box-sizing: border-box;
+        }
+
+        /* Top Bar */
+        .controls-area {
+            margin-bottom: 20px;
+            display: flex;
+            gap: 10px;
+            align-items: center;
+            flex-wrap: wrap;
+        }
+
+        input[type="text"] {
+            padding: 10px;
+            background: var(--panel-bg);
+            border: 1px solid #444;
+            color: white;
+            border-radius: 4px;
+        }
+        
+        .url-input { flex-grow: 1; min-width: 200px; }
+        .team-input { width: 150px; text-align: center; font-weight: bold; }
+        
+        #team1Name { border-bottom: 3px solid var(--team1-color); }
+        #team2Name { border-bottom: 3px solid var(--team2-color); }
+
+        button {
+            padding: 10px 20px;
+            cursor: pointer;
+            background: var(--accent);
+            color: white;
+            border: none;
+            border-radius: 4px;
+            font-weight: bold;
+        }
+        button:hover { opacity: 0.9; }
+        .btn-secondary { background: #555; }
+        .btn-local { background: var(--btn-local); }
+
+        button:disabled {
+            opacity: 0.5;
+            cursor: not-allowed;
+            pointer-events: none;
+        }
+
+        /* Main Workspace */
+        .workspace {
+            display: flex;
+            flex-grow: 1;
+            gap: 20px;
+            overflow: hidden; 
+        }
+
+        /* Video Area */
+        .video-wrapper {
+            flex: 2;
+            display: flex;
+            flex-direction: column;
+            position: relative;
+        }
+
+        .video-container {
+            flex-grow: 1;
+            background: black;
+            border-radius: 8px;
+            overflow: hidden;
+            position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        /* Ensure both players can take up the full space */
+        #player, #localPlayer { width: 100%; height: 100%; }
+        /* Local player hidden by default via JS */
+        #localPlayer { display: none; outline: none; }
+
+        .focus-warning {
+            position: absolute;
+            top: 10px;
+            left: 50%;
+            transform: translateX(-50%);
+            background: rgba(0,0,0,0.6);
+            padding: 5px 15px;
+            border-radius: 20px;
+            font-size: 0.8rem;
+            color: #ddd;
+            pointer-events: none;
+            opacity: 0;
+            transition: opacity 0.3s;
+            z-index: 10;
+        }
+        body:not(.shortcuts-active) .focus-warning { opacity: 1; }
+
+        /* Status Bar */
+        .status-bar {
+            padding: 15px;
+            background: #333;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-family: monospace;
+            font-size: 1.1em;
+            margin-top: 10px;
+            border-radius: 8px;
+        }
+
+        .live-score {
+            font-size: 1.5em;
+            font-weight: bold;
+            margin: 0 20px;
+        }
+
+        .status-indicator {
+            display: inline-block;
+            width: 12px;
+            height: 12px;
+            border-radius: 50%;
+            background: #555;
+            margin-right: 10px;
+        }
+        .status-indicator.recording { background: #e74c3c; animation: pulse 1s infinite; }
+
+        /* Segment List */
+        .segment-list-container {
+            flex: 1;
+            background: var(--panel-bg);
+            border-radius: 8px;
+            padding: 15px;
+            overflow: hidden;
+            display: flex;
+            flex-direction: column;
+        }
+
+        #segmentList {
+            flex-grow: 1;         
+            overflow-y: auto;     
+            min-height: 0;        
+            margin-bottom: 0px;  
+            padding-right: 5px;   
+        }
+
+        .segment-item {
+            background: #3d3d3d;
+            margin-bottom: 12px;
+            padding: 12px;
+            border-radius: 6px;
+            border-left: 4px solid #888; /* Default Neutral */
+            display: flex;
+            flex-direction: column;
+            gap: 5px;
+        }
+
+        .segment-item.winner-1 { border-left-color: var(--team1-color); }
+        .segment-item.winner-2 { border-left-color: var(--team2-color); }
+
+        .segment-header {
+            display: flex;
+            align-items: center;
+            font-size: 0.9em;
+            color: #bbb;
+        }
+        
+        .winner-toggle {
+            cursor: pointer;
+            font-weight: bold;
+            display: flex;
+            align-items: center;
+            gap: 5px;
+        }
+        .winner-toggle:hover {
+            color: white;
+            text-decoration: underline;
+        }
+
+        .score-badge {
+            background: #222;
+            padding: 2px 8px;
+            border-radius: 4px;
+            color: white;
+            font-weight: bold;
+            margin-left: auto;
+        }
+
+        .segment-controls {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #222;
+            padding: 8px;
+            border-radius: 4px;
+        }
+
+        .time-display {
+            font-family: monospace;
+            cursor: pointer;
+            padding: 2px 4px;
+        }
+        .time-display:hover { color: var(--accent); }
+
+        .nudge-btn {
+            background: #444; width: 20px; height: 20px; font-size: 10px; padding: 0;
+            display: inline-flex; align-items: center; justify-content: center;
+        }
+
+        .shortcuts {
+            margin-top: auto;
+            font-size: 0.8em;
+            color: #888;
+            padding-top: 10px;
+            border-top: 1px solid #444;
+        }
+        .key {
+            background: #555; color: white; padding: 2px 6px;
+            border-radius: 4px; font-family: monospace; font-weight: bold;
+        }
+        .key.t1 { background: var(--team1-color); }
+        .key.t2 { background: var(--team2-color); }
+
+        @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }
+        .active-recording-text { color: #e74c3c; font-weight: bold; display: none; }
+
+    </style>
+</head>
+<body class="shortcuts-active">
+
+    <div class="controls-area">
+        <input type="text" id="team1Name" class="team-input" value="Home" placeholder="Team 1" oninput="renderSegments()">
+        <span style="color:#888; font-weight:bold;">VS</span>
+        <input type="text" id="team2Name" class="team-input" value="Away" placeholder="Team 2" oninput="renderSegments()">
+        
+        <input type="text" id="videoUrl" class="url-input" placeholder="YouTube Link or File Name">
+        <button onclick="loadVideoFromInput()">Load YT</button>
+        
+        <button class="btn-local" onclick="document.getElementById('localVideoInput').click()">Load Video File</button>
+        <input type="file" id="localVideoInput" accept="video/*" style="display:none" onchange="loadLocalVideo(this)">
+        
+        <button class="btn-secondary" onclick="document.getElementById('fileInput').click()">Load JSON</button>
+        <input type="file" id="fileInput" accept=".json" style="display:none" onchange="loadJSONFromFile(this)">
+    </div>
+
+    <div class="workspace">
+        
+        <div class="video-wrapper">
+            <div class="focus-warning">Click video to enable shortcuts</div>
+            <div class="video-container" onclick="refocusApp()">
+                <div id="player"></div> 
+                <video id="localPlayer" controls></video>
+            </div>
+            
+            <div class="status-bar">
+                <div>
+                    <span id="recDot" class="status-indicator"></span>
+                    <span id="statusText">Idle</span>
+                    <span id="recordingTimer" class="active-recording-text"> (IN: <span id="inTimeDisplay">0:00</span>)</span>
+                </div>
+                <div class="live-score">
+                    <span style="color:var(--team1-color)" id="score1Display">0</span>
+                    -
+                    <span style="color:var(--team2-color)" id="score2Display">0</span>
+                </div>
+                <div id="currentTime">00:00</div>
+            </div>
+        </div>
+
+        <div class="segment-list-container" onclick="refocusApp()">
+            <h3>Plays</h3>
+            <div id="segmentList">
+                <div style="color: #666; font-style: italic; padding: 10px;">Press 'I' to start, then 1 or 2 to score.</div>
+            </div>
+
+            <div class="shortcuts">
+                <p><span class="key">Space</span> Play/Pause</p>
+                <p><span class="key">I</span> Start Play</p>
+                <p><span class="key t1">1</span> End + Point Team 1</p>
+                <p><span class="key t2">2</span> End + Point Team 2</p>
+                <p><span class="key">Bksp</span> Undo</p>
+                <p><span class="key">↑/↓</span> Skip 5s &nbsp; <span class="key">←/→</span> Skip 2s</p>
+            </div>
+
+            <button id="downloadBtn" class="btn-secondary" style="width:100%; margin-top:10px;" onclick="downloadJSON()" disabled>Download JSON</button>
+        </div>
+    </div>
+
+    <script>
+        // --- Variables ---
+        let player; // YouTube Player instance
+        let localPlayer = document.getElementById('localPlayer'); // Local Video Element
+        let currentMode = 'none'; // 'youtube' or 'local'
+        let currentVideoId = '';
+        let currentLocalFilename = '';
+        
+        let recording = false;
+        let startTime = null;
+        let segments = [];
+        let updateInterval;
+        
+        // Running Score State
+        let currentScore1 = 0;
+        let currentScore2 = 0;
+
+        // --- Unified Playback Interface ---
+        const playback = {
+            play: () => {
+                if(currentMode === 'youtube' && player && player.playVideo) player.playVideo();
+                if(currentMode === 'local') localPlayer.play();
+            },
+            pause: () => {
+                if(currentMode === 'youtube' && player && player.pauseVideo) player.pauseVideo();
+                if(currentMode === 'local') localPlayer.pause();
+            },
+            toggle: () => {
+                if(currentMode === 'youtube' && player && player.getPlayerState) {
+                    player.getPlayerState() === 1 ? player.pauseVideo() : player.playVideo();
+                }
+                if(currentMode === 'local') {
+                    localPlayer.paused ? localPlayer.play() : localPlayer.pause();
+                }
+            },
+            seek: (time) => {
+                if(currentMode === 'youtube' && player && player.seekTo) player.seekTo(time, true);
+                if(currentMode === 'local') localPlayer.currentTime = time;
+            },
+            nudge: (seconds) => {
+                const now = playback.getTime();
+                playback.seek(now + seconds);
+            },
+            getTime: () => {
+                if(currentMode === 'youtube' && player && player.getCurrentTime) return player.getCurrentTime();
+                if(currentMode === 'local') return localPlayer.currentTime;
+                return 0;
+            }
+        };
+
+        // --- Focus & Init ---
+        window.addEventListener('blur', () => document.body.classList.remove('shortcuts-active'));
+        window.addEventListener('focus', () => document.body.classList.add('shortcuts-active'));
+        document.addEventListener('click', (e) => {
+            if(e.target.tagName !== 'INPUT' && !e.target.closest('button')) refocusApp();
+        });
+
+        // NEW: When mouse is released from local video (e.g. after drag), force blur.
+        // This ensures the seek bar doesn't keep focus.
+        localPlayer.addEventListener('mouseup', () => {
+             setTimeout(() => {
+                 localPlayer.blur();
+                 refocusApp();
+             }, 50);
+        });
+
+        function refocusApp() {
+            window.focus();
+            document.body.focus();
+            document.body.classList.add('shortcuts-active');
+        }
+
+        // --- YouTube API ---
+        var tag = document.createElement('script');
+        tag.src = "https://www.youtube.com/iframe_api";
+        var firstScriptTag = document.getElementsByTagName('script')[0];
+        firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
+
+        function onYouTubeIframeAPIReady() {
+            player = new YT.Player('player', {
+                height: '100%', width: '100%', videoId: '',
+                events: { 'onReady': onPlayerReady, 'onStateChange': onPlayerStateChange },
+                playerVars: { 'rel': 0, 'modestbranding': 1 }
+            });
+        }
+        function onPlayerReady(event) { updateInterval = setInterval(updateUI, 100); }
+        function onPlayerStateChange(event) {
+            if (event.data === YT.PlayerState.PLAYING || event.data === YT.PlayerState.PAUSED) refocusApp();
+        }
+
+        // --- Loading Logic ---
+        function switchMode(mode) {
+            currentMode = mode;
+            resetAll();
+            
+            if(mode === 'youtube') {
+                document.getElementById('player').style.display = 'block';
+                document.getElementById('localPlayer').style.display = 'none';
+                localPlayer.pause();
+                localPlayer.src = "";
+            } else if (mode === 'local') {
+                document.getElementById('player').style.display = 'none';
+                document.getElementById('localPlayer').style.display = 'block';
+                if(player && player.stopVideo) player.stopVideo();
+            }
+        }
+
+        function loadVideoFromInput() {
+            const url = document.getElementById('videoUrl').value;
+            const videoId = extractVideoID(url);
+            if (videoId && player) {
+                switchMode('youtube');
+                currentVideoId = videoId;
+                player.loadVideoById(videoId);
+                updateStatus("Ready (YouTube).");
+                refocusApp();
+            } else { alert("Invalid YouTube URL"); }
+        }
+
+        function loadLocalVideo(input) {
+            const file = input.files[0];
+            if (!file) return;
+
+            switchMode('local');
+            currentLocalFilename = file.name;
+            document.getElementById('videoUrl').value = file.name;
+            
+            const fileURL = URL.createObjectURL(file);
+            localPlayer.src = fileURL;
+            updateStatus(`Ready (${file.name})`);
+            refocusApp();
+            input.value = '';
+        }
+
+        function extractVideoID(url) {
+            var regExp = /^.*((youtu.be\/)|(v\/)|(\/u\/\w\/)|(embed\/)|(watch\?))\??v?=?([^#&?]*).*/;
+            var match = url.match(regExp);
+            return (match && match[7].length == 11) ? match[7] : false;
+        }
+
+        function resetAll() {
+            segments = [];
+            recording = false;
+            startTime = null;
+            currentScore1 = 0;
+            currentScore2 = 0;
+            renderSegments();
+            updateScoreDisplay();
+        }
+
+        // --- Keyboard Controls (WINDOW LEVEL + CAPTURE + FORCE BLUR) ---
+        // Changed to 'window' to capture events before they reach the video/slider
+        window.addEventListener('keydown', (e) => {
+            if (e.target.tagName === 'INPUT' && e.target.type === 'text') return;
+
+            const key = e.key.toLowerCase();
+            const customKeys = [
+                ' ', 'k', 'i', '1', '2', 'backspace', 'delete', 
+                'arrowleft', 'arrowright', 'arrowup', 'arrowdown'
+            ];
+
+            if (customKeys.includes(key)) {
+                // 1. Stop propagation immediately so video slider doesn't get it
+                e.preventDefault();
+                e.stopImmediatePropagation();
+
+                // 2. Extra safety: If video is somehow focused, blur it now.
+                if (document.activeElement === localPlayer) {
+                    localPlayer.blur();
+                    document.body.focus();
+                }
+
+                switch (key) {
+                    case ' ': case 'k': 
+                        playback.toggle(); 
+                        break;
+                    case 'i': 
+                        setInPoint(); 
+                        break;
+                    case '1': 
+                        setOutPoint(1); 
+                        break; 
+                    case '2': 
+                        setOutPoint(2); 
+                        break; 
+                    case 'backspace': case 'delete': 
+                        handleUndo(); 
+                        break;
+                    case 'arrowleft': 
+                        playback.nudge(-2); 
+                        break;
+                    case 'arrowright': 
+                        playback.nudge(2); 
+                        break;
+                    case 'arrowup': 
+                        playback.nudge(5); 
+                        break;
+                    case 'arrowdown': 
+                        playback.nudge(-5); 
+                        break;
+                }
+            }
+        }, { capture: true }); 
+
+        function setInPoint() {
+            if (currentMode === 'none') return;
+            recording = true;
+            startTime = playback.getTime();
+            document.getElementById('recDot').classList.add('recording');
+            document.getElementById('recordingTimer').style.display = "inline";
+            document.getElementById('inTimeDisplay').innerText = formatTime(startTime);
+            updateStatus("Recording... Press 1 or 2.");
+        }
+
+        function setOutPoint(winner) {
+            if (!recording) return;
+            const endTime = playback.getTime();
+            if (endTime <= startTime) {
+                updateStatus("⚠️ End before Start. Scrub forward.");
+                return;
+            }
+
+            let s1 = currentScore1;
+            let s2 = currentScore2;
+            
+            if (winner === 1) s1++;
+            if (winner === 2) s2++;
+
+            const newSegment = {
+                id: Date.now(),
+                start: startTime,
+                end: endTime,
+                winner: winner,
+                scoreState: { t1: s1, t2: s2 } 
+            };
+
+            segments.push(newSegment);
+            currentScore1 = s1;
+            currentScore2 = s2;
+
+            cancelRecordingState();
+            updateStatus(`Saved! Point for ${winner === 1 ? 'Team 1' : 'Team 2'}`);
+            renderSegments();
+            updateScoreDisplay();
+        }
+
+        function handleUndo() {
+            if (recording) {
+                cancelRecordingState();
+                updateStatus("Cancelled.");
+            } else if (segments.length > 0) {
+                segments.pop();
+                recalculateScores(); 
+                renderSegments();
+                updateStatus("Last segment deleted.");
+            }
+        }
+
+        function cancelRecordingState() {
+            recording = false;
+            startTime = null;
+            document.getElementById('recDot').classList.remove('recording');
+            document.getElementById('recordingTimer').style.display = "none";
+        }
+
+        function recalculateScores() {
+            let s1 = 0;
+            let s2 = 0;
+            segments.forEach(seg => {
+                if(seg.winner === 1) s1++;
+                if(seg.winner === 2) s2++;
+                seg.scoreState = { t1: s1, t2: s2 };
+            });
+            currentScore1 = s1;
+            currentScore2 = s2;
+            updateScoreDisplay();
+        }
+
+        function deleteSegment(id) {
+            segments = segments.filter(s => s.id !== id);
+            recalculateScores();
+            renderSegments();
+        }
+        
+        function toggleWinner(id) {
+            const seg = segments.find(s => s.id === id);
+            if(!seg) return;
+            if(seg.winner === 1) seg.winner = 2;
+            else seg.winner = 1;
+            recalculateScores();
+            renderSegments();
+        }
+
+        // --- Render ---
+        function updateUI() {
+            const t = playback.getTime();
+            document.getElementById('currentTime').innerText = formatTime(t);
+        }
+
+        function updateScoreDisplay() {
+            document.getElementById('score1Display').innerText = currentScore1;
+            document.getElementById('score2Display').innerText = currentScore2;
+        }
+
+        function updateStatus(msg) { document.getElementById('statusText').innerHTML = msg; }
+
+        function renderSegments() {
+            const list = document.getElementById('segmentList');
+            list.innerHTML = '';
+
+            const btn = document.getElementById('downloadBtn');
+            if(btn) btn.disabled = (segments.length === 0);
+            
+            segments.sort((a, b) => a.start - b.start);
+
+            segments.forEach((seg, index) => {
+                const div = document.createElement('div');
+                div.className = `segment-item winner-${seg.winner}`;
+                
+                let winText = "No Point"; 
+                if(seg.winner === 1) winText = "Point: " + document.getElementById('team1Name').value;
+                if(seg.winner === 2) winText = "Point: " + document.getElementById('team2Name').value;
+
+                div.innerHTML = `
+                    <div class="segment-header">
+                        <span class="winner-toggle" onclick="toggleWinner(${seg.id})" title="Click to change winner">
+                             #${index + 1} &bull; ${winText} ↻
+                        </span>
+                        <span class="score-badge">
+                            ${seg.scoreState.t1} - ${seg.scoreState.t2}
+                        </span>
+                        <button class="delete-btn" onclick="deleteSegment(${seg.id})" style="background:none; border:none; color:#888; cursor:pointer;">×</button>
+                    </div>
+                    <div class="segment-controls">
+                        <button class="nudge-btn" onclick="nudge(${seg.id},'start',-0.5)">&lt;</button>
+                        <span class="time-display" onclick="jump(${seg.start})">${formatTime(seg.start)}</span>
+                        <button class="nudge-btn" onclick="nudge(${seg.id},'start',0.5)">&gt;</button>
+                        <span style="color:#666">-</span>
+                        <button class="nudge-btn" onclick="nudge(${seg.id},'end',-0.5)">&lt;</button>
+                        <span class="time-display" onclick="jump(${seg.end})">${formatTime(seg.end)}</span>
+                        <button class="nudge-btn" onclick="nudge(${seg.id},'end',0.5)">&gt;</button>
+                    </div>
+                `;
+                list.appendChild(div);
+            });
+        }
+
+        function nudge(id, type, val) {
+            let s = segments.find(x => x.id === id);
+            if(type === 'start') s.start += val;
+            else s.end += val;
+            jump(type === 'start' ? s.start : s.end);
+            renderSegments();
+        }
+        
+        function jump(t) { 
+            playback.seek(t); 
+            playback.pause(); 
+            refocusApp(); 
+        }
+        
+        function formatTime(s) {
+            if (isNaN(s)) return "0:00.0";
+            const m = Math.floor(s / 60);
+            const sec = Math.floor(s % 60);
+            const ms = Math.floor((s % 1) * 10);
+            return `${m}:${sec<10?'0':''}${sec}.${ms}`;
+        }
+
+        // --- JSON Export ---
+        function loadJSONFromFile(input) {
+            const file = input.files[0];
+            if (!file) return;
+            const reader = new FileReader();
+            reader.onload = function(e) {
+                try {
+                    const data = JSON.parse(e.target.result);
+                    if(data.team1) document.getElementById('team1Name').value = data.team1;
+                    if(data.team2) document.getElementById('team2Name').value = data.team2;
+                    
+                    segments = data.segments;
+                    
+                    if (data.mode === 'local') {
+                        switchMode('local');
+                        currentLocalFilename = data.videoTitle || "Unknown";
+                        document.getElementById('videoUrl').value = data.videoTitle || "";
+                        alert(`Highlights loaded for local file: "${currentLocalFilename}"\nPlease load the actual video file to view segments.`);
+                    } else if (data.videoId) {
+                        switchMode('youtube');
+                        currentVideoId = data.videoId;
+                        document.getElementById('videoUrl').value = "https://www.youtube.com/watch?v=" + currentVideoId;
+                        if (player) player.loadVideoById(currentVideoId);
+                    }
+
+                    recalculateScores();
+                    renderSegments();
+                    updateStatus("Loaded JSON.");
+                } catch(err) { alert("Error: "+err); }
+            };
+            reader.readAsText(file);
+            input.value = '';
+        }
+
+        function downloadJSON() {
+            if (segments.length === 0) { alert("No segments!"); return; }
+            
+            let t1 = document.getElementById('team1Name').value || "Home";
+            let t2 = document.getElementById('team2Name').value || "Away";
+            let t1Formatted = t1.trim().replace(/\s+/g, '-');
+            let t2Formatted = t2.trim().replace(/\s+/g, '-');
+            let title = `${t1Formatted}_vs_${t2Formatted}`;
+            
+            const data = {
+                mode: currentMode,
+                videoId: currentMode === 'youtube' ? currentVideoId : null,
+                videoTitle: currentMode === 'local' ? currentLocalFilename : title,
+                team1: t1,
+                team2: t2,
+                segments: segments
+            };
+            
+            const blob = new Blob([JSON.stringify(data, null, 2)], {type : 'application/json'});
+            const link = document.createElement('a');
+            link.href = URL.createObjectURL(blob);
+            link.download = `${title}.json`;
+            link.click();
+        }
+    </script>
+</body>
+</html>
