@@ -292,12 +292,12 @@
         <div class="segment-list-container" onclick="refocusApp()">
             <h3>Plays</h3>
             <div id="segmentList">
-                <div style="color: #666; font-style: italic; padding: 10px;">Press 'I' to start, then 1 or 2 to score.</div>
+                <div style="color: #666; font-style: italic; padding: 10px;">Press 'Q' to start, then 1 or 2 to score.</div>
             </div>
 
             <div class="shortcuts">
                 <p><span class="key">Space</span> Play/Pause</p>
-                <p><span class="key">I</span> Start Play</p>
+                <p><span class="key">Q</span> Start Play</p>
                 <p><span class="key t1">1</span> End + Point Team 1</p>
                 <p><span class="key t2">2</span> End + Point Team 2</p>
                 <p><span class="key">Bksp</span> Undo</p>
@@ -477,7 +477,7 @@
 
             const key = e.key.toLowerCase();
             const customKeys = [
-                ' ', 'k', 'i', '1', '2', 'backspace', 'delete', 
+                ' ', 'k', 'q', '1', '2', 'backspace', 'delete', 
                 'arrowleft', 'arrowright', 'arrowup', 'arrowdown'
             ];
 
@@ -496,7 +496,7 @@
                     case ' ': case 'k': 
                         playback.toggle(); 
                         break;
-                    case 'i': 
+                    case 'q': 
                         setInPoint(); 
                         break;
                     case '1': 
@@ -564,6 +564,9 @@
             updateStatus(`Saved! Point for ${winner === 1 ? 'Team 1' : 'Team 2'}`);
             renderSegments();
             updateScoreDisplay();
+            
+            // Auto-scroll to the bottom so the new play is visible
+            scrollToBottom();
         }
 
         function handleUndo() {
@@ -619,7 +622,6 @@
             document.getElementById('currentTime').innerText = formatTime(t);
 
             // FIX: Aggressively steal focus from YouTube iframe if video is Playing.
-            // This ensures controls work immediately after a scrub+release.
             if (currentMode === 'youtube' && player && player.getPlayerState) {
                 if (player.getPlayerState() === YT.PlayerState.PLAYING && document.activeElement.tagName === 'IFRAME') {
                     refocusApp();
@@ -633,6 +635,11 @@
         }
 
         function updateStatus(msg) { document.getElementById('statusText').innerHTML = msg; }
+
+        function scrollToBottom() {
+            const list = document.getElementById('segmentList');
+            list.scrollTop = list.scrollHeight;
+        }
 
         function renderSegments() {
             const list = document.getElementById('segmentList');
@@ -725,6 +732,7 @@
                     recalculateScores();
                     renderSegments();
                     updateStatus("Loaded JSON.");
+                    scrollToBottom();
                 } catch(err) { alert("Error: "+err); }
             };
             reader.readAsText(file);

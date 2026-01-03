@@ -25,18 +25,13 @@ abort_event = threading.Event()
 def setup_logging():
     """Redirects standard output and errors to a log file next to the executable."""
     
-    # Determine the folder where the executable (or script) lives
     if getattr(sys, 'frozen', False):
-        # If frozen (App), use the path of the binary inside the bundle
         application_path = os.path.dirname(sys.executable)
     else:
-        # If running as a script, use the script's directory
         application_path = os.path.dirname(os.path.abspath(__file__))
 
-    # Create the log file path
     log_file = os.path.join(application_path, "debug.log")
     
-    # 'w' mode clears the file every time the app starts
     log_fs = open(log_file, "w", buffering=1)
     
     sys.stdout = log_fs
@@ -110,13 +105,11 @@ def get_video_dimensions(filepath, ffmpeg_exe):
 
 # --- CORE LOGIC (THREADED) ---
 def run_processing_logic(args):
-    # Define paths here so they are accessible in cleanup
     temp_dir = None
     processed_dir = None
     list_file_path = None
 
     def cleanup_workspace():
-        """Helper to remove all temporary artifacts."""
         print("🧹 Cleaning workspace...")
         try:
             if temp_dir and os.path.exists(temp_dir): shutil.rmtree(temp_dir)
@@ -128,7 +121,7 @@ def run_processing_logic(args):
     try:
         setup_logging()
         
-        if '-p' in args: args.remove('-p') # Check flag but assume True
+        if '-p' in args: args.remove('-p')
 
         if not args:
             show_error_state("No file dropped.")
@@ -156,7 +149,6 @@ def run_processing_logic(args):
 
         os.chdir(work_dir)
         
-        # Define Paths
         temp_dir = os.path.join(work_dir, "temp_clips")
         processed_dir = os.path.join(work_dir, "processed_clips")
         list_file_path = os.path.join(work_dir, "ffmpeg_list.txt")
@@ -177,9 +169,28 @@ def run_processing_logic(args):
         update_gui(10, "Reading JSON...")
         all_segments = []
         
+        # --- PARSING MODES ---
+        source_mode = 'youtube'
+        local_video_path = None
+
         with open(json_file, 'r') as f:
             data = json.load(f)
+            
+            if data.get('mode') == 'local':
+                source_mode = 'local'
+            elif data.get('videoId'):
+                source_mode = 'youtube'
+            
             video_id = data.get('videoId')
+            video_title = data.get('videoTitle', '')
+            
+            if source_mode == 'local':
+                possible_path = os.path.join(work_dir, video_title)
+                if not os.path.exists(possible_path):
+                     show_error_state(f"Missing video: {video_title}\nMove JSON to video folder.")
+                     return
+                local_video_path = possible_path
+
             t1_name = data.get('team1', 'Home')
             t2_name = data.get('team2', 'Away')
             segments = data.get('segments', [])
@@ -210,21 +221,16 @@ def run_processing_logic(args):
         font_path = get_font_path()
         total_segs = len(all_segments)
 
-        # Processing Loop
         for i, seg in enumerate(all_segments):
-            
-            # --- ABORT CHECK ---
             if abort_event.is_set():
                 print("ABORT SIGNAL RECEIVED.")
                 cleanup_workspace()
                 show_error_state("Aborted by user.")
                 return 
-            # -------------------
 
             percent = 10 + int((i / total_segs) * 80)
             update_gui(percent, f"Processing Clip {i+1} of {total_segs}...")
 
-            url = f"https://www.youtube.com/watch?v={seg['video_id']}"
             raw_filename = os.path.join(temp_dir, f"raw_{i:03d}.mp4")
             final_filename = os.path.join(processed_dir, f"clip_{i:03d}.mp4")
             
@@ -232,24 +238,45 @@ def run_processing_logic(args):
                 downloaded_clips.append(final_filename)
                 continue
             
-            ydl_opts = {
-                'format': 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
-                'quiet': True, 'no_warnings': True,
-                'ffmpeg_location': ffmpeg_exe, 
-                'outtmpl': raw_filename,
-                'download_ranges': lambda info, ydl: [{'start_time': seg['start'], 'end_time': seg['end']}]
-            }
-
+            # --- GET RAW CLIP ---
             try:
-                with yt_dlp.YoutubeDL(ydl_opts) as ydl: ydl.download([url])
+                if source_mode == 'youtube':
+                    url = f"https://www.youtube.com/watch?v={seg['video_id']}"
+                    ydl_opts = {
+                        'format': 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+                        'quiet': True, 'no_warnings': True,
+                        'ffmpeg_location': ffmpeg_exe, 
+                        'outtmpl': raw_filename,
+                        'download_ranges': lambda info, ydl: [{'start_time': seg['start'], 'end_time': seg['end']}]
+                    }
+                    with yt_dlp.YoutubeDL(ydl_opts) as ydl: ydl.download([url])
                 
+                elif source_mode == 'local':
+                    
+                    start_sec = float(seg['start'])
+                    duration = float(seg['end']) - start_sec
+                    
+                    cmd_cut = [
+                        ffmpeg_exe, "-y",
+                        "-ss", str(start_sec),       # Seek to exact start
+                        "-i", local_video_path,      # Input video
+                        "-t", str(duration),         # Record for exact duration
+                        "-c:v", "libx264", "-preset", "ultrafast",
+                        "-c:a", "aac", 
+                        raw_filename
+                    ]
+                    subprocess.run(cmd_cut, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+
+                # Validate raw file exists
                 found = glob.glob(os.path.join(temp_dir, f"raw_{i:03d}*"))
-                if not found: continue
+                if not found: 
+                    print(f"Failed to generate raw clip for segment {i}")
+                    continue
                 downloaded_file = found[0]
                 
+                # --- OVERLAY PROCESSING ---
                 vid_w, vid_h = get_video_dimensions(downloaded_file, ffmpeg_exe)
                 
-                # Layout Math
                 sb_height = int(vid_h * 0.15)
                 sb_y = vid_h - sb_height
                 accent_height = max(2, int(vid_h * 0.006))
@@ -271,6 +298,10 @@ def run_processing_logic(args):
                 prog_box_dim = prog_slot_h - prog_gap
 
                 filters = []
+                
+                # Force timestamps to start at 0 (Redundant check, but safe)
+                filters.append("setpts=PTS-STARTPTS")
+
                 filters.append(f"drawbox=x={prog_line_x}:y={prog_margin_top}:w={prog_line_w}:h={int(prog_available_h)}:color=white@1:t=fill")
                 
                 for k in range(i + 1):
@@ -321,7 +352,6 @@ def run_processing_logic(args):
                 print(f"Error on segment {i}: {e}")
                 traceback.print_exc()
 
-        # Concatenate
         if downloaded_clips and not abort_event.is_set():
             update_gui(90, "Merging Clips...")
             with open(list_file_path, 'w') as f:
@@ -332,7 +362,6 @@ def run_processing_logic(args):
             cmd_concat = [ffmpeg_exe, "-f", "concat", "-safe", "0", "-i", list_file_path, "-c", "copy", "-y", output_video]
             subprocess.run(cmd_concat, check=True)
             
-            # --- SUCCESS CLEANUP ---
             cleanup_workspace()
             show_finish_state(f"Saved: {os.path.basename(output_video)}")
             
@@ -360,7 +389,6 @@ def main():
     root.geometry(f'{w}x{h}+{int(x)}+{int(y)}')
     root.resizable(False, False)
 
-    # Force Focus
     root.lift()
     root.attributes('-topmost', True)
     root.after_idle(root.attributes, '-topmost', False)
