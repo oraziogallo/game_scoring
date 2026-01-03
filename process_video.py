@@ -88,9 +88,12 @@ def get_font_path():
 
 def get_ffmpeg_path():
     if getattr(sys, 'frozen', False):
+        # Logic for the compiled app
         base_path = sys._MEIPASS
         return os.path.join(base_path, 'ffmpeg')
-    return "ffmpeg"
+    else:
+        # Logic for local debugging
+        return "/opt/homebrew/bin/ffmpeg"
 
 def get_video_dimensions(filepath, ffmpeg_exe):
     try:
@@ -373,6 +376,9 @@ def run_processing_logic(args):
         print(f"CRASH: {msg}")
         traceback.print_exc()
         show_error_state("Check log on Desktop.")
+
+    finally:
+        cleanup_workspace()
 
 # --- MAIN ENTRY POINT ---
 def main():
