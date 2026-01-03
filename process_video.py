@@ -312,7 +312,7 @@ def run_processing_logic(args):
                     else: x_pos = int(prog_line_x + prog_line_w + prog_gap); color = "blue@0.8"
                     box_cmd = f"drawbox=x={x_pos}:y={y_pos}:w={int(prog_box_dim)}:h={int(prog_box_dim)}:color={color}:t=fill"
                     if k == i:
-                        trigger = max(0, (seg['end'] - seg['start']) - 2.0)
+                        trigger = max(0, (seg['end'] - seg['start']))
                         box_cmd += f":enable='gt(t,{trigger})'"
                     filters.append(box_cmd)
 
@@ -326,7 +326,7 @@ def run_processing_logic(args):
                 filters.append(f"drawtext=fontfile='{font_path}':text='{seg['t1_name']}':fontcolor=white:fontsize={font_team}:x={t1_text_x}-text_w:y={box_y}+(({box_height}-text_h)/2)")
                 filters.append(f"drawtext=fontfile='{font_path}':text='{seg['t2_name']}':fontcolor=white:fontsize={font_team}:x={t2_text_x}:y={box_y}+(({box_height}-text_h)/2)")
 
-                trigger_time = max(0, (seg['end'] - seg['start']) - 2.0)
+                trigger_time = max(0, (seg['end'] - seg['start']))
                 if i == 0: prev_s1, prev_s2 = 0, 0
                 else: prev_s1, prev_s2 = all_segments[i-1]['s1'], all_segments[i-1]['s2']
                 
