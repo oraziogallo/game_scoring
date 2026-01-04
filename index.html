@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Volleyball Video Scorer</title>
+    <title>Volleyball Video Scorer + Local Support</title>
     <style>
         :root {
             --bg-color: #1a1a1a;
@@ -12,6 +12,7 @@
             --team1-color: #3498db;
             --team2-color: #e74c3c;
             --panel-bg: #2d2d2d;
+            --btn-local: #d27b1a; 
         }
 
         body {
@@ -43,7 +44,7 @@
             border-radius: 4px;
         }
         
-        .url-input { flex-grow: 1; min-width: 300px; }
+        .url-input { flex-grow: 1; min-width: 200px; }
         .team-input { width: 150px; text-align: center; font-weight: bold; }
         
         #team1Name { border-bottom: 3px solid var(--team1-color); }
@@ -60,6 +61,7 @@
         }
         button:hover { opacity: 0.9; }
         .btn-secondary { background: #555; }
+        .btn-local { background: var(--btn-local); }
 
         button:disabled {
             opacity: 0.5;
@@ -89,7 +91,15 @@
             border-radius: 8px;
             overflow: hidden;
             position: relative;
+            display: flex;
+            align-items: center;
+            justify-content: center;
         }
+
+        /* Ensure both players can take up the full space */
+        #player, #localPlayer { width: 100%; height: 100%; }
+        /* Local player hidden by default via JS */
+        #localPlayer { display: none; outline: none; }
 
         .focus-warning {
             position: absolute;
@@ -135,7 +145,7 @@
             background: #555;
             margin-right: 10px;
         }
-        .status-indicator.recording { background: var(--danger); animation: pulse 1s infinite; }
+        .status-indicator.recording { background: #e74c3c; animation: pulse 1s infinite; }
 
         /* Segment List */
         .segment-list-container {
@@ -149,11 +159,11 @@
         }
 
         #segmentList {
-            flex-grow: 1;         /* Takes up all remaining vertical space */
-            overflow-y: auto;     /* Scroll ONLY this play list */
-            min-height: 0;        /* Required for nested scrolling in flexbox */
-            margin-bottom: 0px;  /* Add space between list and the download button */
-            padding-right: 5px;   /* Avoid scrollbar overlapping content */
+            flex-grow: 1;         
+            overflow-y: auto;     
+            min-height: 0;        
+            margin-bottom: 0px;  
+            padding-right: 5px;   
         }
 
         .segment-item {
@@ -167,13 +177,11 @@
             gap: 5px;
         }
 
-        /* Color code segments by winner */
         .segment-item.winner-1 { border-left-color: var(--team1-color); }
         .segment-item.winner-2 { border-left-color: var(--team2-color); }
 
         .segment-header {
             display: flex;
-            /* justify-content: space-between; Removed to allow score to stick right */
             align-items: center;
             font-size: 0.9em;
             color: #bbb;
@@ -197,7 +205,7 @@
             border-radius: 4px;
             color: white;
             font-weight: bold;
-            margin-left: auto; /* Pushes score to the right next to X */
+            margin-left: auto;
         }
 
         .segment-controls {
@@ -236,34 +244,34 @@
         .key.t2 { background: var(--team2-color); }
 
         @keyframes pulse { 0% { opacity: 1; } 50% { opacity: 0.4; } 100% { opacity: 1; } }
-        .active-recording-text { color: var(--danger); font-weight: bold; display: none; }
-        .action-link { color: #fff; text-decoration: underline; cursor: pointer; margin-left: 5px; }
+        .active-recording-text { color: #e74c3c; font-weight: bold; display: none; }
 
     </style>
 </head>
 <body class="shortcuts-active">
 
-    <!-- Input Area -->
     <div class="controls-area">
         <input type="text" id="team1Name" class="team-input" value="Home" placeholder="Team 1" oninput="renderSegments()">
         <span style="color:#888; font-weight:bold;">VS</span>
         <input type="text" id="team2Name" class="team-input" value="Away" placeholder="Team 2" oninput="renderSegments()">
         
-        <input type="text" id="videoUrl" class="url-input" placeholder="YouTube Link">
-        <button onclick="loadVideoFromInput()">Load</button>
+        <input type="text" id="videoUrl" class="url-input" placeholder="YouTube Link or File Name">
+        <button onclick="loadVideoFromInput()">Load YT</button>
+        
+        <button class="btn-local" onclick="document.getElementById('localVideoInput').click()">Load Video File</button>
+        <input type="file" id="localVideoInput" accept="video/*" style="display:none" onchange="loadLocalVideo(this)">
         
         <button class="btn-secondary" onclick="document.getElementById('fileInput').click()">Load JSON</button>
         <input type="file" id="fileInput" accept=".json" style="display:none" onchange="loadJSONFromFile(this)">
     </div>
 
-    <!-- Main Workspace -->
     <div class="workspace">
         
-        <!-- Left: Video Player -->
         <div class="video-wrapper">
             <div class="focus-warning">Click video to enable shortcuts</div>
-            <div class="video-container" onclick="refocusApp()">
+            <div class="video-container" id="videoContainer" onclick="refocusApp()">
                 <div id="player"></div> 
+                <video id="localPlayer" controls></video>
             </div>
             
             <div class="status-bar">
@@ -272,7 +280,6 @@
                     <span id="statusText">Idle</span>
                     <span id="recordingTimer" class="active-recording-text"> (IN: <span id="inTimeDisplay">0:00</span>)</span>
                 </div>
-                <!-- Live Score Display -->
                 <div class="live-score">
                     <span style="color:var(--team1-color)" id="score1Display">0</span>
                     -
@@ -282,20 +289,19 @@
             </div>
         </div>
 
-        <!-- Right: Segment List -->
         <div class="segment-list-container" onclick="refocusApp()">
             <h3>Plays</h3>
             <div id="segmentList">
-                <div style="color: #666; font-style: italic; padding: 10px;">Press 'I' to start, then 1 or 2 to score.</div>
+                <div style="color: #666; font-style: italic; padding: 10px;">Press 'Q' to start, then 1 or 2 to score.</div>
             </div>
 
             <div class="shortcuts">
                 <p><span class="key">Space</span> Play/Pause</p>
-                <p><span class="key">I</span> Start Play</p>
+                <p><span class="key">Q</span> Start Play</p>
                 <p><span class="key t1">1</span> End + Point Team 1</p>
                 <p><span class="key t2">2</span> End + Point Team 2</p>
-                <!-- Removed O (No Score) -->
                 <p><span class="key">Bksp</span> Undo</p>
+                <p><span class="key">↑/↓</span> Skip 5s &nbsp; <span class="key">←/→</span> Skip 2s</p>
             </div>
 
             <button id="downloadBtn" class="btn-secondary" style="width:100%; margin-top:10px;" onclick="downloadJSON()" disabled>Download JSON</button>
@@ -303,20 +309,78 @@
     </div>
 
     <script>
-        let player;
+        // --- Variables ---
+        let player; // YouTube Player instance
+        let localPlayer = document.getElementById('localPlayer'); // Local Video Element
+        let currentMode = 'none'; // 'youtube' or 'local'
+        let currentVideoId = '';
+        let currentLocalFilename = '';
+        
         let recording = false;
         let startTime = null;
         let segments = [];
         let updateInterval;
-        let currentVideoId = '';
+        let isMouseDown = false;
         
         // Running Score State
         let currentScore1 = 0;
         let currentScore2 = 0;
 
+        // --- Unified Playback Interface ---
+        const playback = {
+            play: () => {
+                if(currentMode === 'youtube' && player && player.playVideo) player.playVideo();
+                if(currentMode === 'local') localPlayer.play();
+            },
+            pause: () => {
+                if(currentMode === 'youtube' && player && player.pauseVideo) player.pauseVideo();
+                if(currentMode === 'local') localPlayer.pause();
+            },
+            toggle: () => {
+                if(currentMode === 'youtube' && player && player.getPlayerState) {
+                    player.getPlayerState() === 1 ? player.pauseVideo() : player.playVideo();
+                }
+                if(currentMode === 'local') {
+                    localPlayer.paused ? localPlayer.play() : localPlayer.pause();
+                }
+            },
+            seek: (time) => {
+                if(currentMode === 'youtube' && player && player.seekTo) player.seekTo(time, true);
+                if(currentMode === 'local') localPlayer.currentTime = time;
+            },
+            nudge: (seconds) => {
+                const now = playback.getTime();
+                playback.seek(now + seconds);
+            },
+            getTime: () => {
+                if(currentMode === 'youtube' && player && player.getCurrentTime) return player.getCurrentTime();
+                if(currentMode === 'local') return localPlayer.currentTime;
+                return 0;
+            }
+        };
+
         // --- Focus & Init ---
         window.addEventListener('blur', () => document.body.classList.remove('shortcuts-active'));
         window.addEventListener('focus', () => document.body.classList.add('shortcuts-active'));
+        
+        // Track mouse to know when drags end
+        window.addEventListener('mousedown', () => isMouseDown = true);
+        window.addEventListener('mouseup', () => {
+             isMouseDown = false;
+             setTimeout(refocusApp, 50); 
+        });
+
+        // Local Player focus fixes
+        function blurLocalVideo() {
+            if (document.activeElement === localPlayer) {
+                localPlayer.blur();
+                refocusApp(); 
+            }
+        }
+        localPlayer.addEventListener('mouseup', () => setTimeout(blurLocalVideo, 50));
+        localPlayer.addEventListener('click', () => setTimeout(blurLocalVideo, 50));
+        localPlayer.addEventListener('seeked', () => setTimeout(blurLocalVideo, 50));
+
         document.addEventListener('click', (e) => {
             if(e.target.tagName !== 'INPUT' && !e.target.closest('button')) refocusApp();
         });
@@ -337,25 +401,58 @@
             player = new YT.Player('player', {
                 height: '100%', width: '100%', videoId: '',
                 events: { 'onReady': onPlayerReady, 'onStateChange': onPlayerStateChange },
-                playerVars: { 'rel': 0, 'modestbranding': 1 }
+                // FIX: disablekb: 1 prevents YouTube from stealing arrow keys for its own seeking
+                playerVars: { 'rel': 0, 'modestbranding': 1, 'disablekb': 1 } 
             });
         }
         function onPlayerReady(event) { updateInterval = setInterval(updateUI, 100); }
         function onPlayerStateChange(event) {
-            if (event.data === YT.PlayerState.PLAYING || event.data === YT.PlayerState.PAUSED) refocusApp();
+            // Refocus whenever state changes (e.g. buffering -> playing)
+            refocusApp();
         }
 
-        // --- Logic ---
+        // --- Loading Logic ---
+        function switchMode(mode) {
+            currentMode = mode;
+            resetAll();
+            
+            if(mode === 'youtube') {
+                document.getElementById('player').style.display = 'block';
+                document.getElementById('localPlayer').style.display = 'none';
+                localPlayer.pause();
+                localPlayer.src = "";
+            } else if (mode === 'local') {
+                document.getElementById('player').style.display = 'none';
+                document.getElementById('localPlayer').style.display = 'block';
+                if(player && player.stopVideo) player.stopVideo();
+            }
+        }
+
         function loadVideoFromInput() {
             const url = document.getElementById('videoUrl').value;
             const videoId = extractVideoID(url);
             if (videoId && player) {
+                switchMode('youtube');
                 currentVideoId = videoId;
                 player.loadVideoById(videoId);
-                resetAll();
-                updateStatus("Ready.");
+                updateStatus("Ready (YouTube).");
                 refocusApp();
             } else { alert("Invalid YouTube URL"); }
+        }
+
+        function loadLocalVideo(input) {
+            const file = input.files[0];
+            if (!file) return;
+
+            switchMode('local');
+            currentLocalFilename = file.name;
+            document.getElementById('videoUrl').value = file.name;
+            
+            const fileURL = URL.createObjectURL(file);
+            localPlayer.src = fileURL;
+            updateStatus(`Ready (${file.name})`);
+            refocusApp();
+            input.value = '';
         }
 
         function extractVideoID(url) {
@@ -374,31 +471,63 @@
             updateScoreDisplay();
         }
 
-        // --- Keyboard ---
-        document.addEventListener('keydown', (e) => {
-            if (e.target.tagName === 'INPUT') return;
-            const key = e.key.toLowerCase();
-            switch (key) {
-                case ' ': case 'k': e.preventDefault(); togglePlay(); break;
-                case 'i': setInPoint(); break;
-                // Removed 'o' case
-                case '1': setOutPoint(1); break; // Team 1 wins
-                case '2': setOutPoint(2); break; // Team 2 wins
-                case 'backspace': case 'delete': handleUndo(); break;
-                case 'arrowleft': player.seekTo(player.getCurrentTime() - 5, true); break;
-                case 'arrowright': player.seekTo(player.getCurrentTime() + 5, true); break;
-            }
-        });
+        // --- Keyboard Controls ---
+        window.addEventListener('keydown', (e) => {
+            if (e.target.tagName === 'INPUT' && e.target.type === 'text') return;
 
-        function togglePlay() {
-            if (!player || !player.getPlayerState) return;
-            player.getPlayerState() === 1 ? player.pauseVideo() : player.playVideo();
-        }
+            const key = e.key.toLowerCase();
+            const customKeys = [
+                ' ', 'k', 'q', '1', '2', 'backspace', 'delete', 
+                'arrowleft', 'arrowright', 'arrowup', 'arrowdown'
+            ];
+
+            if (customKeys.includes(key)) {
+                // Prevent bubbling if focused on local player
+                if (e.target === localPlayer) {
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    blurLocalVideo();
+                }
+
+                e.preventDefault();
+                e.stopImmediatePropagation();
+
+                switch (key) {
+                    case ' ': case 'k': 
+                        playback.toggle(); 
+                        break;
+                    case 'q': 
+                        setInPoint(); 
+                        break;
+                    case '1': 
+                        setOutPoint(1); 
+                        break; 
+                    case '2': 
+                        setOutPoint(2); 
+                        break; 
+                    case 'backspace': case 'delete': 
+                        handleUndo(); 
+                        break;
+                    case 'arrowleft': 
+                        playback.nudge(-2); 
+                        break;
+                    case 'arrowright': 
+                        playback.nudge(2); 
+                        break;
+                    case 'arrowup': 
+                        playback.nudge(5); 
+                        break;
+                    case 'arrowdown': 
+                        playback.nudge(-5); 
+                        break;
+                }
+            }
+        }, { capture: true }); 
 
         function setInPoint() {
-            if (!player) return;
+            if (currentMode === 'none') return;
             recording = true;
-            startTime = player.getCurrentTime();
+            startTime = playback.getTime();
             document.getElementById('recDot').classList.add('recording');
             document.getElementById('recordingTimer').style.display = "inline";
             document.getElementById('inTimeDisplay').innerText = formatTime(startTime);
@@ -407,13 +536,12 @@
 
         function setOutPoint(winner) {
             if (!recording) return;
-            const endTime = player.getCurrentTime();
+            const endTime = playback.getTime();
             if (endTime <= startTime) {
                 updateStatus("⚠️ End before Start. Scrub forward.");
                 return;
             }
 
-            // Update Logic for Score
             let s1 = currentScore1;
             let s2 = currentScore2;
             
@@ -425,12 +553,10 @@
                 start: startTime,
                 end: endTime,
                 winner: winner,
-                scoreState: { t1: s1, t2: s2 } // Save score AT this moment
+                scoreState: { t1: s1, t2: s2 } 
             };
 
             segments.push(newSegment);
-            
-            // Commit new score
             currentScore1 = s1;
             currentScore2 = s2;
 
@@ -438,6 +564,9 @@
             updateStatus(`Saved! Point for ${winner === 1 ? 'Team 1' : 'Team 2'}`);
             renderSegments();
             updateScoreDisplay();
+            
+            // Auto-scroll to the bottom so the new play is visible
+            scrollToBottom();
         }
 
         function handleUndo() {
@@ -445,7 +574,6 @@
                 cancelRecordingState();
                 updateStatus("Cancelled.");
             } else if (segments.length > 0) {
-                // If we delete the last segment, revert score to whatever the previous segment had
                 segments.pop();
                 recalculateScores(); 
                 renderSegments();
@@ -461,13 +589,12 @@
         }
 
         function recalculateScores() {
-            // Re-run the score logic from the beginning of the list
             let s1 = 0;
             let s2 = 0;
             segments.forEach(seg => {
                 if(seg.winner === 1) s1++;
                 if(seg.winner === 2) s2++;
-                seg.scoreState = { t1: s1, t2: s2 }; // Update state just in case
+                seg.scoreState = { t1: s1, t2: s2 };
             });
             currentScore1 = s1;
             currentScore2 = s2;
@@ -476,26 +603,30 @@
 
         function deleteSegment(id) {
             segments = segments.filter(s => s.id !== id);
-            recalculateScores(); // Critical: update future scores
+            recalculateScores();
             renderSegments();
         }
         
         function toggleWinner(id) {
             const seg = segments.find(s => s.id === id);
             if(!seg) return;
-            
-            // Cycle: 1 (Team 1) -> 2 (Team 2) -> 1
             if(seg.winner === 1) seg.winner = 2;
-            else seg.winner = 1; // Default to 1 if it was 2 (or 0)
-            
+            else seg.winner = 1;
             recalculateScores();
             renderSegments();
         }
 
         // --- Render ---
         function updateUI() {
-            if (!player || !player.getCurrentTime) return;
-            document.getElementById('currentTime').innerText = formatTime(player.getCurrentTime());
+            const t = playback.getTime();
+            document.getElementById('currentTime').innerText = formatTime(t);
+
+            // FIX: Aggressively steal focus from YouTube iframe if video is Playing.
+            if (currentMode === 'youtube' && player && player.getPlayerState) {
+                if (player.getPlayerState() === YT.PlayerState.PLAYING && document.activeElement.tagName === 'IFRAME') {
+                    refocusApp();
+                }
+            }
         }
 
         function updateScoreDisplay() {
@@ -505,6 +636,11 @@
 
         function updateStatus(msg) { document.getElementById('statusText').innerHTML = msg; }
 
+        function scrollToBottom() {
+            const list = document.getElementById('segmentList');
+            list.scrollTop = list.scrollHeight;
+        }
+
         function renderSegments() {
             const list = document.getElementById('segmentList');
             list.innerHTML = '';
@@ -512,14 +648,13 @@
             const btn = document.getElementById('downloadBtn');
             if(btn) btn.disabled = (segments.length === 0);
             
-            // Sort by Start time
             segments.sort((a, b) => a.start - b.start);
 
             segments.forEach((seg, index) => {
                 const div = document.createElement('div');
                 div.className = `segment-item winner-${seg.winner}`;
                 
-                let winText = "No Point"; // Fallback, shouldn't happen with strict 1/2
+                let winText = "No Point"; 
                 if(seg.winner === 1) winText = "Point: " + document.getElementById('team1Name').value;
                 if(seg.winner === 2) winText = "Point: " + document.getElementById('team2Name').value;
 
@@ -554,9 +689,15 @@
             jump(type === 'start' ? s.start : s.end);
             renderSegments();
         }
-        function jump(t) { player.seekTo(t, true); player.pauseVideo(); refocusApp(); }
+        
+        function jump(t) { 
+            playback.seek(t); 
+            playback.pause(); 
+            refocusApp(); 
+        }
         
         function formatTime(s) {
+            if (isNaN(s)) return "0:00.0";
             const m = Math.floor(s / 60);
             const sec = Math.floor(s % 60);
             const ms = Math.floor((s % 1) * 10);
@@ -573,36 +714,44 @@
                     const data = JSON.parse(e.target.result);
                     if(data.team1) document.getElementById('team1Name').value = data.team1;
                     if(data.team2) document.getElementById('team2Name').value = data.team2;
-                    currentVideoId = data.videoId;
-                    document.getElementById('videoUrl').value = "https://www.youtube.com/watch?v=" + currentVideoId;
-                    if (player) player.loadVideoById(currentVideoId);
+                    
                     segments = data.segments;
+                    
+                    if (data.mode === 'local') {
+                        switchMode('local');
+                        currentLocalFilename = data.videoTitle || "Unknown";
+                        document.getElementById('videoUrl').value = data.videoTitle || "";
+                        alert(`Highlights loaded for local file: "${currentLocalFilename}"\nPlease load the actual video file to view segments.`);
+                    } else if (data.videoId) {
+                        switchMode('youtube');
+                        currentVideoId = data.videoId;
+                        document.getElementById('videoUrl').value = "https://www.youtube.com/watch?v=" + currentVideoId;
+                        if (player) player.loadVideoById(currentVideoId);
+                    }
+
                     recalculateScores();
                     renderSegments();
                     updateStatus("Loaded JSON.");
+                    scrollToBottom();
                 } catch(err) { alert("Error: "+err); }
             };
             reader.readAsText(file);
+            input.value = '';
         }
 
         function downloadJSON() {
             if (segments.length === 0) { alert("No segments!"); return; }
             
-            // 1. Get current team names (default to "Home" and "Away" if empty)
             let t1 = document.getElementById('team1Name').value || "Home";
             let t2 = document.getElementById('team2Name').value || "Away";
-            
-            // 2. Format names: Trim whitespace and replace spaces with dashes
-            // .trim() removes leading/trailing spaces
-            // .replace(/\s+/g, '-') replaces all internal spaces/tabs with a dash
             let t1Formatted = t1.trim().replace(/\s+/g, '-');
             let t2Formatted = t2.trim().replace(/\s+/g, '-');
-            
-            // 3. Construct the filename with "_vs_" separator
             let title = `${t1Formatted}_vs_${t2Formatted}`;
             
             const data = {
-                videoId: currentVideoId,
+                mode: currentMode,
+                videoId: currentMode === 'youtube' ? currentVideoId : null,
+                videoTitle: currentMode === 'local' ? currentLocalFilename : title,
                 team1: t1,
                 team2: t2,
                 segments: segments
@@ -611,10 +760,7 @@
             const blob = new Blob([JSON.stringify(data, null, 2)], {type : 'application/json'});
             const link = document.createElement('a');
             link.href = URL.createObjectURL(blob);
-            
-            // 4. Set the download attribute to the new title
             link.download = `${title}.json`;
-            
             link.click();
         }
     </script>

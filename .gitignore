@@ -1,5 +1,6 @@
 build
 dist
-.log
+*.log
 .DS_Store
 notes_for_me.md
+.vscode/
