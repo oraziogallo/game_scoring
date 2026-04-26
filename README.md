@@ -12,3 +12,13 @@
   - In the terminal window that just opened type `xattr -cr` 
   - Drag the icon of the app to the terminal window
   - Press enter
+
+## More on the script to create the video:
+Process a single JSON file
+```python process_video.py -f config.json```
+
+Process all JSON files in a folder
+```python process_video.py -d ./videos_folder```
+
+Launch the GUI (original behavior)
+```python process_video.py```

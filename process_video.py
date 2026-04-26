@@ -12,6 +12,7 @@ import threading
 import tkinter as tk
 from tkinter import ttk
 import re
+import argparse
 
 # --- GLOBAL GUI VARIABLES ---
 root = None
@@ -55,24 +56,28 @@ def show_finish_state(message="Done!"):
         def _finish():
             if status_var: status_var.set(message)
             if progress_var: progress_var.set(100)
-            if close_button: 
+            if close_button:
                 close_button.config(state="normal")
                 close_button.config(text="Close Window")
             if abort_button:
                 abort_button.config(state="disabled")
             os.system(f"""osascript -e 'display notification "{message}" with title "game_scoring"'""")
         root.after(0, _finish)
+    else:
+        print(f"✅ {message}")
 
 def show_error_state(error_msg):
     if root:
         def _err():
             if status_var: status_var.set(f"Stopped: {error_msg}")
-            if close_button: 
+            if close_button:
                 close_button.config(state="normal")
                 close_button.config(text="Close Window")
             if abort_button:
                 abort_button.config(state="disabled")
         root.after(0, _err)
+    else:
+        print(f"❌ Error: {error_msg}", file=sys.stderr)
 
 def trigger_abort():
     if status_var: status_var.set("Aborting... please wait.")
@@ -383,10 +388,48 @@ def run_processing_logic(args):
 # --- MAIN ENTRY POINT ---
 def main():
     global root, progress_var, status_var, close_button, abort_button
-    
+
+    parser = argparse.ArgumentParser(description="Process video clips from JSON configuration files")
+    parser.add_argument('-f', '--file', type=str, help='Path to a single JSON file')
+    parser.add_argument('-d', '--directory', type=str, help='Path to a directory containing JSON files')
+
+    args = parser.parse_args()
+
+    # CLI mode: -f or -d specified
+    if args.file or args.directory:
+        setup_logging()
+
+        json_files = []
+
+        if args.file:
+            if not os.path.isfile(args.file) or not args.file.lower().endswith('.json'):
+                print(f"Error: {args.file} is not a valid JSON file")
+                sys.exit(1)
+            json_files.append(args.file)
+
+        elif args.directory:
+            if not os.path.isdir(args.directory):
+                print(f"Error: {args.directory} is not a valid directory")
+                sys.exit(1)
+            json_files = glob.glob(os.path.join(args.directory, "*.json"))
+            if not json_files:
+                print(f"Error: No JSON files found in {args.directory}")
+                sys.exit(1)
+
+        # Process each JSON file
+        for json_file in json_files:
+            print(f"\n{'='*60}")
+            print(f"Processing: {json_file}")
+            print(f"{'='*60}")
+            run_processing_logic([json_file])
+
+        print("\nAll files processed.")
+        return
+
+    # GUI mode: no arguments
     root = tk.Tk()
     root.title("game_scoring")
-    
+
     w, h = 400, 200
     ws = root.winfo_screenwidth()
     hs = root.winfo_screenheight()
