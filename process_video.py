@@ -222,12 +222,26 @@ def run_processing_logic(args):
             show_error_state("No segments in JSON.")
             return
 
+        # Sentinel segment so the last play's dot and final score are visible.
+        # total_segs counts only real segments (preserves vertical bar slot sizing).
+        total_segs = len(all_segments)
+        last_seg = all_segments[-1]
+        all_segments.append({
+            'video_id': last_seg['video_id'],
+            'start': last_seg['end'],
+            'end': last_seg['end'] + 1,
+            't1_name': last_seg['t1_name'],
+            't2_name': last_seg['t2_name'],
+            's1': last_seg['s1'],
+            's2': last_seg['s2'],
+            'winner': 0
+        })
+
         os.makedirs(temp_dir, exist_ok=True)
         os.makedirs(processed_dir, exist_ok=True)
 
         downloaded_clips = []
         font_path = get_font_path()
-        total_segs = len(all_segments)
 
         for i, seg in enumerate(all_segments):
             if abort_event.is_set():
