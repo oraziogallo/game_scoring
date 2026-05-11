@@ -686,14 +686,14 @@
             let s = segments.find(x => x.id === id);
             if(type === 'start') s.start += val;
             else s.end += val;
-            jump(type === 'start' ? s.start : s.end);
+            playback.seek(type === 'start' ? s.start : s.end);
+            refocusApp();
             renderSegments();
         }
         
-        function jump(t) { 
-            playback.seek(t); 
-            playback.pause(); 
-            refocusApp(); 
+        function jump(t) {
+            playback.seek(t);
+            refocusApp();
         }
         
         function formatTime(s) {
@@ -714,9 +714,7 @@
                     const data = JSON.parse(e.target.result);
                     if(data.team1) document.getElementById('team1Name').value = data.team1;
                     if(data.team2) document.getElementById('team2Name').value = data.team2;
-                    
-                    segments = data.segments;
-                    
+
                     if (data.mode === 'local') {
                         switchMode('local');
                         currentLocalFilename = data.videoTitle || "Unknown";
@@ -729,6 +727,7 @@
                         if (player) player.loadVideoById(currentVideoId);
                     }
 
+                    segments = data.segments;
                     recalculateScores();
                     renderSegments();
                     updateStatus("Loaded JSON.");

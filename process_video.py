@@ -14,6 +14,8 @@ from tkinter import ttk
 import re
 import argparse
 
+FINAL_SCORE_EXTRA_SECS = 3  # extra seconds appended to the last segment to show the final score
+
 # --- GLOBAL GUI VARIABLES ---
 root = None
 progress_var = None
@@ -222,20 +224,7 @@ def run_processing_logic(args):
             show_error_state("No segments in JSON.")
             return
 
-        # Sentinel segment so the last play's dot and final score are visible.
-        # total_segs counts only real segments (preserves vertical bar slot sizing).
         total_segs = len(all_segments)
-        last_seg = all_segments[-1]
-        all_segments.append({
-            'video_id': last_seg['video_id'],
-            'start': last_seg['end'],
-            'end': last_seg['end'] + 1,
-            't1_name': last_seg['t1_name'],
-            't2_name': last_seg['t2_name'],
-            's1': last_seg['s1'],
-            's2': last_seg['s2'],
-            'winner': 0
-        })
 
         os.makedirs(temp_dir, exist_ok=True)
         os.makedirs(processed_dir, exist_ok=True)
@@ -255,11 +244,14 @@ def run_processing_logic(args):
 
             raw_filename = os.path.join(temp_dir, f"raw_{i:03d}.mp4")
             final_filename = os.path.join(processed_dir, f"clip_{i:03d}.mp4")
-            
+
+            is_last_seg = (i == total_segs - 1)
+            clip_end = seg['end'] + (FINAL_SCORE_EXTRA_SECS if is_last_seg else 0)
+
             if os.path.exists(final_filename):
                 downloaded_clips.append(final_filename)
                 continue
-            
+
             # --- GET RAW CLIP ---
             try:
                 if source_mode == 'youtube':
@@ -267,16 +259,16 @@ def run_processing_logic(args):
                     ydl_opts = {
                         'format': 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[ext=mp4]/best',
                         'quiet': True, 'no_warnings': True,
-                        'ffmpeg_location': ffmpeg_exe, 
+                        'ffmpeg_location': ffmpeg_exe,
                         'outtmpl': raw_filename,
-                        'download_ranges': lambda info, ydl: [{'start_time': seg['start'], 'end_time': seg['end']}]
+                        'download_ranges': lambda info, ydl, _s=seg['start'], _e=clip_end: [{'start_time': _s, 'end_time': _e}]
                     }
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl: ydl.download([url])
-                
+
                 elif source_mode == 'local':
-                    
+
                     start_sec = float(seg['start'])
-                    duration = float(seg['end']) - start_sec
+                    duration = float(clip_end) - start_sec
                     
                     cmd_cut = [
                         ffmpeg_exe, "-y",
