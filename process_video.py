@@ -465,7 +465,8 @@ def main():
         global cli_mode, cli_warning_log
         cli_mode = True
 
-        log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug.log")
+        log_dir = os.path.abspath(args.directory if args.directory else os.path.dirname(args.file))
+        log_path = os.path.join(log_dir, "debug.log")
         cli_warning_log = WarningCapture(log_path)
         sys.stderr = cli_warning_log
 
@@ -474,9 +475,10 @@ def main():
 
         # Process each JSON file
         for idx, json_file in enumerate(json_files, start=1):
-            print(f"\nWorking on game {idx}")
+            output_name = os.path.splitext(os.path.basename(json_file))[0] + ".mp4"
+            print(f"\nWorking on {output_name}")
             run_processing_logic([json_file])
-            print(f"Completed game {idx}")
+            print(f"Completed {output_name}")
 
         sys.stderr = sys.__stderr__
         if cli_warning_log.had_warnings:
