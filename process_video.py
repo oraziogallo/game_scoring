@@ -13,12 +13,14 @@ import tkinter as tk
 from tkinter import ttk
 import re
 import argparse
+from tqdm import tqdm
 
 FINAL_SCORE_EXTRA_SECS = 3  # extra seconds appended to the last segment to show the final score
 
 # --- GLOBAL GUI VARIABLES ---
 root = None
 progress_var = None
+cli_mode = False
 status_var = None
 close_button = None
 abort_button = None
@@ -129,8 +131,9 @@ def run_processing_logic(args):
             print(f"Warning during cleanup: {e}")
 
     try:
-        setup_logging()
-        
+        if not cli_mode:
+            setup_logging()
+
         if '-p' in args: args.remove('-p')
 
         if not args:
@@ -232,12 +235,15 @@ def run_processing_logic(args):
         downloaded_clips = []
         font_path = get_font_path()
 
-        for i, seg in enumerate(all_segments):
+        seg_iter = enumerate(all_segments)
+        if cli_mode:
+            seg_iter = tqdm(seg_iter, total=total_segs, desc="Segments", unit="seg")
+        for i, seg in seg_iter:
             if abort_event.is_set():
                 print("ABORT SIGNAL RECEIVED.")
                 cleanup_workspace()
                 show_error_state("Aborted by user.")
-                return 
+                return
 
             percent = 10 + int((i / total_segs) * 80)
             update_gui(percent, f"Processing Clip {i+1} of {total_segs}...")
@@ -261,7 +267,8 @@ def run_processing_logic(args):
                         'quiet': True, 'no_warnings': True,
                         'ffmpeg_location': ffmpeg_exe,
                         'outtmpl': raw_filename,
-                        'download_ranges': lambda info, ydl, _s=seg['start'], _e=clip_end: [{'start_time': _s, 'end_time': _e}]
+                        'download_ranges': lambda info, ydl, _s=seg['start'], _e=clip_end: [{'start_time': _s, 'end_time': _e}],
+                        'postprocessor_args': {'default': ['-loglevel', 'error']},
                     }
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl: ydl.download([url])
 
@@ -403,8 +410,6 @@ def main():
 
     # CLI mode: -f or -d specified
     if args.file or args.directory:
-        setup_logging()
-
         json_files = []
 
         if args.file:
@@ -422,12 +427,17 @@ def main():
                 print(f"Error: No JSON files found in {args.directory}")
                 sys.exit(1)
 
+        global cli_mode
+        cli_mode = True
+
+        n = len(json_files)
+        print(f"Creating videos for a total of {n} game(s)")
+
         # Process each JSON file
-        for json_file in json_files:
-            print(f"\n{'='*60}")
-            print(f"Processing: {json_file}")
-            print(f"{'='*60}")
+        for idx, json_file in enumerate(json_files, start=1):
+            print(f"\nWorking on game {idx}")
             run_processing_logic([json_file])
+            print(f"Completed game {idx}")
 
         print("\nAll files processed.")
         return
