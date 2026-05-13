@@ -21,10 +21,36 @@ FINAL_SCORE_EXTRA_SECS = 3  # extra seconds appended to the last segment to show
 root = None
 progress_var = None
 cli_mode = False
+cli_warning_log = None   # WarningCapture instance in CLI mode
 status_var = None
 close_button = None
 abort_button = None
 abort_event = threading.Event()
+
+class WarningCapture:
+    """Wraps a log file and tracks whether anything was written to it."""
+    def __init__(self, path):
+        self._f = open(path, 'w', buffering=1)
+        self.had_warnings = False
+
+    def write(self, s):
+        if s.strip():
+            self.had_warnings = True
+        self._f.write(s)
+
+    def flush(self):
+        self._f.flush()
+
+    def close(self):
+        self._f.close()
+
+    # yt_dlp logger interface
+    def debug(self, msg): pass
+    def info(self, msg): pass
+    def warning(self, msg):
+        self.write(f"WARNING: {msg}\n")
+    def error(self, msg):
+        self.write(f"ERROR: {msg}\n")
 
 # --- 1. LOGGING SETUP ---
 def setup_logging():
@@ -237,7 +263,7 @@ def run_processing_logic(args):
 
         seg_iter = enumerate(all_segments)
         if cli_mode:
-            seg_iter = tqdm(seg_iter, total=total_segs, desc="Segments", unit="seg")
+            seg_iter = tqdm(seg_iter, total=total_segs, desc="Segments", unit="seg", file=sys.stdout)
         for i, seg in seg_iter:
             if abort_event.is_set():
                 print("ABORT SIGNAL RECEIVED.")
@@ -268,8 +294,10 @@ def run_processing_logic(args):
                         'ffmpeg_location': ffmpeg_exe,
                         'outtmpl': raw_filename,
                         'download_ranges': lambda info, ydl, _s=seg['start'], _e=clip_end: [{'start_time': _s, 'end_time': _e}],
-                        'postprocessor_args': {'default': ['-loglevel', 'error']},
+                        'postprocessor_args': ['-loglevel', 'error'],
                     }
+                    if cli_warning_log:
+                        ydl_opts['logger'] = cli_warning_log
                     with yt_dlp.YoutubeDL(ydl_opts) as ydl: ydl.download([url])
 
                 elif source_mode == 'local':
@@ -381,7 +409,14 @@ def run_processing_logic(args):
                     f.write(f"file '{safe_path}'\n")
 
             cmd_concat = [ffmpeg_exe, "-f", "concat", "-safe", "0", "-i", list_file_path, "-c", "copy", "-y", output_video]
-            subprocess.run(cmd_concat, check=True)
+            if cli_mode and cli_warning_log:
+                result = subprocess.run(cmd_concat, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
+                if result.stderr.strip():
+                    cli_warning_log.write(result.stderr)
+                if result.returncode != 0:
+                    raise subprocess.CalledProcessError(result.returncode, cmd_concat)
+            else:
+                subprocess.run(cmd_concat, check=True)
             
             cleanup_workspace()
             show_finish_state(f"Saved: {os.path.basename(output_video)}")
@@ -427,8 +462,12 @@ def main():
                 print(f"Error: No JSON files found in {args.directory}")
                 sys.exit(1)
 
-        global cli_mode
+        global cli_mode, cli_warning_log
         cli_mode = True
+
+        log_path = os.path.join(os.path.dirname(os.path.abspath(__file__)), "debug.log")
+        cli_warning_log = WarningCapture(log_path)
+        sys.stderr = cli_warning_log
 
         n = len(json_files)
         print(f"Creating videos for a total of {n} game(s)")
@@ -438,6 +477,11 @@ def main():
             print(f"\nWorking on game {idx}")
             run_processing_logic([json_file])
             print(f"Completed game {idx}")
+
+        sys.stderr = sys.__stderr__
+        if cli_warning_log.had_warnings:
+            print(f"\nThere were warnings from FFmpeg, check the log file: {log_path}")
+        cli_warning_log.close()
 
         print("\nAll files processed.")
         return
