@@ -168,7 +168,6 @@
 
         .segment-item {
             background: #3d3d3d;
-            margin-bottom: 12px;
             padding: 12px;
             border-radius: 6px;
             border-left: 4px solid #888; /* Default Neutral */
@@ -180,6 +179,15 @@
         .segment-item.winner-1 { border-left-color: var(--team1-color); }
         .segment-item.winner-2 { border-left-color: var(--team2-color); }
         .segment-item.active { background: #5a5a5a; }
+
+        .gap-indicator {
+            display: flex;
+            align-items: center;
+            padding: 4px 0;
+            font-size: 1em;
+            color: transparent;
+        }
+        .gap-indicator.active { color: var(--accent); }
 
         .segment-header {
             display: flex;
@@ -322,6 +330,8 @@
         let segments = [];
         let updateInterval;
         let isMouseDown = false;
+        let lastActiveId = null;
+        let lastActiveGap = -1;
         
         // Running Score State
         let currentScore1 = 0;
@@ -619,10 +629,52 @@
 
         // --- Render ---
         function highlightActiveSegment(t) {
-            document.querySelectorAll('.segment-item').forEach(el => {
+            const items = document.querySelectorAll('.segment-item');
+            const gaps  = document.querySelectorAll('.gap-indicator');
+            const list  = document.getElementById('segmentList');
+
+            // Highlight active segment
+            let activeEl = null;
+            let activeId = null;
+            items.forEach(el => {
                 const active = t >= parseFloat(el.dataset.start) && t <= parseFloat(el.dataset.end);
                 el.classList.toggle('active', active);
+                if (active) { activeEl = el; activeId = el.dataset.start; }
             });
+
+            // Detect which gap the playhead is in (between sorted segments)
+            let activeGap = -1;
+            if (!activeEl && segments.length > 1) {
+                const sorted = [...segments].sort((a, b) => a.start - b.start);
+                for (let i = 0; i < sorted.length - 1; i++) {
+                    if (t > sorted[i].end && t < sorted[i + 1].start) {
+                        activeGap = i;
+                        break;
+                    }
+                }
+            }
+
+            // Show/hide gap chevrons
+            gaps.forEach(el => {
+                el.classList.toggle('active', parseInt(el.dataset.gapAfter) === activeGap);
+            });
+
+            // Scroll: active segment — bring into view once per change
+            if (activeEl && activeId !== lastActiveId) {
+                activeEl.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            }
+
+            // Scroll: in a gap — pin the "before" segment to the top of the list, once per change
+            if (activeGap >= 0 && activeGap !== lastActiveGap) {
+                const beforeEl = items[activeGap];
+                if (beforeEl) {
+                    const top = beforeEl.getBoundingClientRect().top - list.getBoundingClientRect().top + list.scrollTop;
+                    list.scrollTo({ top, behavior: 'smooth' });
+                }
+            }
+
+            lastActiveId  = activeId;
+            lastActiveGap = activeGap;
         }
 
         function updateUI() {
@@ -690,6 +742,14 @@
                     </div>
                 `;
                 list.appendChild(div);
+
+                if (index < segments.length - 1) {
+                    const gapDiv = document.createElement('div');
+                    gapDiv.className = 'gap-indicator';
+                    gapDiv.dataset.gapAfter = index;
+                    gapDiv.innerHTML = '&#9658;';
+                    list.appendChild(gapDiv);
+                }
             });
         }
 
