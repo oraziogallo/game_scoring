@@ -270,7 +270,7 @@
         <button class="btn-local" onclick="document.getElementById('localVideoInput').click()">Load Video File</button>
         <input type="file" id="localVideoInput" accept="video/*" style="display:none" onchange="loadLocalVideo(this)">
         
-        <button class="btn-secondary" onclick="document.getElementById('fileInput').click()">Load JSON</button>
+        <button class="btn-local" onclick="document.getElementById('fileInput').click()">Load JSON</button>
         <input type="file" id="fileInput" accept=".json" style="display:none" onchange="loadJSONFromFile(this)">
     </div>
 
@@ -324,6 +324,7 @@
         let currentMode = 'none'; // 'youtube' or 'local'
         let currentVideoId = '';
         let currentLocalFilename = '';
+        let currentVideoPath = null; // server-relative path if the video is accessible via HTTP
         
         let recording = false;
         let startTime = null;
@@ -332,6 +333,7 @@
         let isMouseDown = false;
         let lastActiveId = null;
         let lastActiveGap = -1;
+        let preserveSegmentsOnVideoLoad = false;
         
         // Running Score State
         let currentScore1 = 0;
@@ -451,16 +453,31 @@
             } else { alert("Invalid YouTube URL"); }
         }
 
-        function loadLocalVideo(input) {
+        async function loadLocalVideo(input) {
             const file = input.files[0];
             if (!file) return;
 
-            switchMode('local');
+            if (preserveSegmentsOnVideoLoad) {
+                preserveSegmentsOnVideoLoad = false;
+                currentMode = 'local';
+                document.getElementById('player').style.display = 'none';
+                document.getElementById('localPlayer').style.display = 'block';
+                if (player && player.stopVideo) player.stopVideo();
+            } else {
+                switchMode('local');
+            }
+
             currentLocalFilename = file.name;
             document.getElementById('videoUrl').value = file.name;
-            
-            const fileURL = URL.createObjectURL(file);
-            localPlayer.src = fileURL;
+
+            // Check if the file is also reachable via the server (for JSON re-loading)
+            currentVideoPath = null;
+            try {
+                const resp = await fetch('/' + encodeURIComponent(file.name), { method: 'HEAD' });
+                if (resp.ok) currentVideoPath = '/' + file.name;
+            } catch (e) {}
+
+            localPlayer.src = currentVideoPath || URL.createObjectURL(file);
             updateStatus(`Ready (${file.name})`);
             refocusApp();
             input.value = '';
@@ -553,30 +570,20 @@
                 return;
             }
 
-            let s1 = currentScore1;
-            let s2 = currentScore2;
-            
-            if (winner === 1) s1++;
-            if (winner === 2) s2++;
-
             const newSegment = {
                 id: Date.now(),
                 start: startTime,
                 end: endTime,
                 winner: winner,
-                scoreState: { t1: s1, t2: s2 } 
+                scoreState: { t1: 0, t2: 0 }
             };
 
             segments.push(newSegment);
-            currentScore1 = s1;
-            currentScore2 = s2;
+            recalculateScores(); // sorts by start time and recomputes all scores
 
             cancelRecordingState();
             updateStatus(`Saved! Point for ${winner === 1 ? 'Team 1' : 'Team 2'}`);
             renderSegments();
-            updateScoreDisplay();
-            
-            // Auto-scroll to the bottom so the new play is visible
             scrollToBottom();
         }
 
@@ -600,6 +607,7 @@
         }
 
         function recalculateScores() {
+            segments.sort((a, b) => a.start - b.start);
             let s1 = 0;
             let s2 = 0;
             segments.forEach(seg => {
@@ -783,25 +791,60 @@
             reader.onload = function(e) {
                 try {
                     const data = JSON.parse(e.target.result);
-                    if(data.team1) document.getElementById('team1Name').value = data.team1;
-                    if(data.team2) document.getElementById('team2Name').value = data.team2;
+                    if (data.team1) document.getElementById('team1Name').value = data.team1;
+                    if (data.team2) document.getElementById('team2Name').value = data.team2;
+
+                    segments = data.segments || [];
 
                     if (data.mode === 'local') {
-                        switchMode('local');
                         currentLocalFilename = data.videoTitle || "Unknown";
                         document.getElementById('videoUrl').value = data.videoTitle || "";
-                        alert(`Highlights loaded for local file: "${currentLocalFilename}"\nPlease load the actual video file to view segments.`);
+
+                        if (currentMode === 'none') {
+                            recalculateScores();
+                            renderSegments();
+                            scrollToBottom();
+
+                            const videoPath = data.videoPath || null;
+                            if (videoPath) {
+                                // JSON has a known server path — verify it's still there then load
+                                fetch(videoPath, { method: 'HEAD' })
+                                    .then(r => {
+                                        if (!r.ok) throw new Error();
+                                        currentMode = 'local';
+                                        currentVideoPath = videoPath;
+                                        document.getElementById('player').style.display = 'none';
+                                        document.getElementById('localPlayer').style.display = 'block';
+                                        if (player && player.stopVideo) player.stopVideo();
+                                        localPlayer.src = videoPath;
+                                        updateStatus(`Ready (${currentLocalFilename})`);
+                                    })
+                                    .catch(() => {
+                                        updateStatus(`Plays loaded. Could not find "${currentLocalFilename}" on server — use "Load Video File".`);
+                                        preserveSegmentsOnVideoLoad = true;
+                                    });
+                            } else {
+                                // Old JSON without videoPath — ask user to load manually
+                                updateStatus(`Plays loaded. Click "Load Video File" to load: "${currentLocalFilename}"`);
+                                preserveSegmentsOnVideoLoad = true;
+                            }
+                            input.value = '';
+                            return;
+                        }
+                        // Video already in player — just update segments
+                        updateStatus("Loaded JSON.");
                     } else if (data.videoId) {
                         switchMode('youtube');
                         currentVideoId = data.videoId;
                         document.getElementById('videoUrl').value = "https://www.youtube.com/watch?v=" + currentVideoId;
                         if (player) player.loadVideoById(currentVideoId);
+                        updateStatus("Loaded JSON.");
+                    } else {
+                        updateStatus("Loaded JSON.");
                     }
 
-                    segments = data.segments;
                     recalculateScores();
                     renderSegments();
-                    updateStatus("Loaded JSON.");
                     scrollToBottom();
                 } catch(err) { alert("Error: "+err); }
             };
@@ -822,6 +865,7 @@
                 mode: currentMode,
                 videoId: currentMode === 'youtube' ? currentVideoId : null,
                 videoTitle: currentMode === 'local' ? currentLocalFilename : title,
+                videoPath: currentMode === 'local' ? currentVideoPath : null,
                 team1: t1,
                 team2: t2,
                 segments: segments
