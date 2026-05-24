@@ -179,6 +179,7 @@
 
         .segment-item.winner-1 { border-left-color: var(--team1-color); }
         .segment-item.winner-2 { border-left-color: var(--team2-color); }
+        .segment-item.active { background: #5a5a5a; }
 
         .segment-header {
             display: flex;
@@ -617,9 +618,17 @@
         }
 
         // --- Render ---
+        function highlightActiveSegment(t) {
+            document.querySelectorAll('.segment-item').forEach(el => {
+                const active = t >= parseFloat(el.dataset.start) && t <= parseFloat(el.dataset.end);
+                el.classList.toggle('active', active);
+            });
+        }
+
         function updateUI() {
             const t = playback.getTime();
             document.getElementById('currentTime').innerText = formatTime(t);
+            highlightActiveSegment(t);
 
             // FIX: Aggressively steal focus from YouTube iframe if video is Playing.
             if (currentMode === 'youtube' && player && player.getPlayerState) {
@@ -653,6 +662,8 @@
             segments.forEach((seg, index) => {
                 const div = document.createElement('div');
                 div.className = `segment-item winner-${seg.winner}`;
+                div.dataset.start = seg.start;
+                div.dataset.end = seg.end;
                 
                 let winText = "No Point"; 
                 if(seg.winner === 1) winText = "Point: " + document.getElementById('team1Name').value;
