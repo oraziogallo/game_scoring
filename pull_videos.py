@@ -31,11 +31,7 @@ def get_devices() -> list[str]:
     return devices
 
 
-def find_videos(device_id: str, days: int) -> list[dict]:
-    cutoff = datetime.now() - timedelta(days=days)
-    cutoff_epoch = int(cutoff.timestamp())
-
-    # Search common video directories on Android
+def find_videos(device_id: str, start_epoch: int, end_epoch: int | None = None) -> list[dict]:
     search_dirs = [
         "/sdcard/DCIM",
         "/sdcard/Movies",
@@ -57,7 +53,6 @@ def find_videos(device_id: str, days: int) -> list[dict]:
             if not path:
                 continue
 
-            # Get modification time and size
             stat_result = run_adb(
                 ["shell", f"stat -c '%Y %s' \"{path}\" 2>/dev/null"],
                 device_id,
@@ -75,7 +70,9 @@ def find_videos(device_id: str, days: int) -> list[dict]:
             except ValueError:
                 continue
 
-            if mtime < cutoff_epoch:
+            if mtime < start_epoch:
+                continue
+            if end_epoch is not None and mtime > end_epoch:
                 continue
 
             recorded_at = datetime.fromtimestamp(mtime)
@@ -132,11 +129,48 @@ def pull_video(device_id: str, remote_path: str, local_path: Path) -> bool:
     return result.returncode == 0
 
 
+def parse_date(s: str) -> datetime:
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(s, fmt)
+        except ValueError:
+            continue
+    raise argparse.ArgumentTypeError(f"Unrecognized date format: '{s}'. Use YYYY-MM-DD.")
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Pull videos from a connected Android device via ADB.")
-    parser.add_argument("-n", "--days", type=int, default=7, help="Only list videos recorded in the last N days (default: 7)")
     parser.add_argument("-d", "--dest", type=Path, default=Path("~/Volleyball").expanduser(), help="Destination directory (default: ~/Volleyball)")
+
+    date_group = parser.add_mutually_exclusive_group()
+    date_group.add_argument("-n", "--days", type=int, default=None, help="Videos recorded in the last N days (default: 7)")
+    date_group.add_argument("--date", type=parse_date, metavar="YYYY-MM-DD", help="Videos recorded on a specific day")
+    date_group.add_argument("--from", dest="date_from", type=parse_date, metavar="YYYY-MM-DD", help="Start of date range (inclusive); use with --to")
+    parser.add_argument("--to", dest="date_to", type=parse_date, metavar="YYYY-MM-DD", help="End of date range (inclusive); use with --from")
+
     args = parser.parse_args()
+
+    if args.date_to is not None and args.date_from is None:
+        parser.error("--to requires --from")
+
+    # Resolve time range
+    if args.date is not None:
+        start_epoch = int(args.date.replace(hour=0, minute=0, second=0).timestamp())
+        end_epoch = int(args.date.replace(hour=23, minute=59, second=59).timestamp())
+        range_desc = f"on {args.date.strftime('%Y-%m-%d')}"
+    elif args.date_from is not None:
+        start_epoch = int(args.date_from.replace(hour=0, minute=0, second=0).timestamp())
+        end_dt = (args.date_to or args.date_from).replace(hour=23, minute=59, second=59)
+        end_epoch = int(end_dt.timestamp())
+        if args.date_to:
+            range_desc = f"from {args.date_from.strftime('%Y-%m-%d')} to {args.date_to.strftime('%Y-%m-%d')}"
+        else:
+            range_desc = f"on {args.date_from.strftime('%Y-%m-%d')}"
+    else:
+        days = args.days if args.days is not None else 7
+        start_epoch = int((datetime.now() - timedelta(days=days)).timestamp())
+        end_epoch = None
+        range_desc = f"in the last {days} day(s)"
 
     # Check for connected devices
     print("Scanning for connected ADB devices...")
@@ -160,11 +194,11 @@ def main() -> None:
             print("  Invalid choice, try again.")
 
     # Find videos
-    print(f"\nSearching for videos recorded in the last {args.days} day(s)...")
-    videos = find_videos(device_id, args.days)
+    print(f"\nSearching for videos recorded {range_desc}...")
+    videos = find_videos(device_id, start_epoch, end_epoch)
 
     if not videos:
-        print(f"No videos found from the last {args.days} day(s).")
+        print(f"No videos found {range_desc}.")
         sys.exit(0)
 
     print(f"\nFound {len(videos)} video(s):\n")
