@@ -130,6 +130,16 @@ def get_ffmpeg_path():
         # Logic for local debugging
         return "/opt/homebrew/bin/ffmpeg"
 
+def is_highlight(seg):
+    """Truthy test for the optional 'highlight' field written by the web UI.
+
+    The field is absent on plays that are not highlights, so older JSON files
+    simply report False."""
+    v = seg.get('highlight')
+    if isinstance(v, str):
+        return v.strip().lower() in ('yes', 'true', '1')
+    return bool(v)
+
 def get_video_dimensions(filepath, ffmpeg_exe):
     try:
         cmd = [ffmpeg_exe, "-i", filepath]
@@ -142,7 +152,7 @@ def get_video_dimensions(filepath, ffmpeg_exe):
     return 1920, 1080
 
 # --- CORE LOGIC (THREADED) ---
-def run_processing_logic(args):
+def run_processing_logic(args, highlights_only=False):
     temp_dir = None
     processed_dir = None
     list_file_path = None
@@ -192,7 +202,8 @@ def run_processing_logic(args):
         processed_dir = os.path.join(work_dir, "processed_clips")
         list_file_path = os.path.join(work_dir, "ffmpeg_list.txt")
         base_name = os.path.splitext(os.path.basename(json_file))[0]
-        output_video = os.path.join(work_dir, f"{base_name}.mp4")
+        suffix = "_highlights" if highlights_only else ""
+        output_video = os.path.join(work_dir, f"{base_name}{suffix}.mp4")
 
         # Permissions Fix
         ffmpeg_exe = get_ffmpeg_path()
@@ -246,12 +257,23 @@ def run_processing_logic(args):
                     'start': seg['start'], 'end': seg['end'],
                     't1_name': t1_name.replace(":", "\\:").replace("'", ""),
                     't2_name': t2_name.replace(":", "\\:").replace("'", ""),
-                    's1': score['t1'], 's2': score['t2'], 'winner': winner
+                    's1': score['t1'], 's2': score['t2'], 'winner': winner,
+                    'highlight': is_highlight(seg)
                 })
 
         if not all_segments:
             show_error_state("No segments in JSON.")
             return
+
+        if highlights_only:
+            # Scores were accumulated over every play above, so filtering here
+            # keeps the running score correct even though we do not draw it.
+            all_segments = [s for s in all_segments if s['highlight']]
+            if not all_segments:
+                show_error_state("No plays marked as highlight in JSON.")
+                return
+            if cli_mode:
+                print(f"Found {len(all_segments)} highlight play(s)")
 
         total_segs = len(all_segments)
 
@@ -274,11 +296,14 @@ def run_processing_logic(args):
             percent = 10 + int((i / total_segs) * 80)
             update_gui(percent, f"Processing Clip {i+1} of {total_segs}...")
 
-            raw_filename = os.path.join(temp_dir, f"raw_{i:03d}.mp4")
-            final_filename = os.path.join(processed_dir, f"clip_{i:03d}.mp4")
+            prefix = "hl_" if highlights_only else ""
+            raw_filename = os.path.join(temp_dir, f"raw_{prefix}{i:03d}.mp4")
+            final_filename = os.path.join(processed_dir, f"clip_{prefix}{i:03d}.mp4")
 
+            # The tail exists only to hold the final score on screen, and the
+            # highlight reel has no scoreboard.
             is_last_seg = (i == total_segs - 1)
-            clip_end = seg['end'] + (FINAL_SCORE_EXTRA_SECS if is_last_seg else 0)
+            clip_end = seg['end'] + (FINAL_SCORE_EXTRA_SECS if is_last_seg and not highlights_only else 0)
 
             if os.path.exists(final_filename):
                 downloaded_clips.append(final_filename)
@@ -317,72 +342,73 @@ def run_processing_logic(args):
                     subprocess.run(cmd_cut, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
 
                 # Validate raw file exists
-                found = glob.glob(os.path.join(temp_dir, f"raw_{i:03d}*"))
+                found = glob.glob(os.path.join(temp_dir, f"raw_{prefix}{i:03d}*"))
                 if not found: 
                     print(f"Failed to generate raw clip for segment {i}")
                     continue
                 downloaded_file = found[0]
                 
                 # --- OVERLAY PROCESSING ---
-                vid_w, vid_h = get_video_dimensions(downloaded_file, ffmpeg_exe)
-                
-                sb_height = int(vid_h * 0.15)
-                sb_y = vid_h - sb_height
-                accent_height = max(2, int(vid_h * 0.006))
-                box_height = int(sb_height * 0.5)
-                box_width = int(box_height * 1.2)
-                box_y = sb_y + (sb_height - box_height) // 2
-                center_x = vid_w // 2
-                box_t1_x = center_x - box_width
-                box_t2_x = center_x
-                font_score = int(box_height * 0.8)
-                font_team = int(sb_height * 0.25)
-                text_team_offset_x = int(box_width * 0.2)
-                prog_margin_top = int(vid_h * 0.05)
-                prog_available_h = vid_h - prog_margin_top - sb_height - int(vid_h * 0.02)
-                prog_line_x = int(vid_h * 0.05) + 14
-                prog_line_w = max(2, int(vid_h * 0.003))
-                prog_slot_h = min(prog_available_h / total_segs, vid_h * 0.05)
-                prog_gap = max(1, int(prog_slot_h * 0.1))
-                prog_box_dim = prog_slot_h - prog_gap
-
-                filters = []
-                
                 # Force timestamps to start at 0 (Redundant check, but safe)
-                filters.append("setpts=PTS-STARTPTS")
+                filters = ["setpts=PTS-STARTPTS"]
 
-                filters.append(f"drawbox=x={prog_line_x}:y={prog_margin_top}:w={prog_line_w}:h={int(prog_available_h)}:color=white@1:t=fill")
+                # The highlight reel keeps the frame clean: no scoreboard
+                # and no progress timeline down the left edge.
+                if not highlights_only:
+                    vid_w, vid_h = get_video_dimensions(downloaded_file, ffmpeg_exe)
                 
-                for k in range(i + 1):
-                    pt_winner = all_segments[k]['winner']
-                    if pt_winner == 0: continue
-                    y_pos = int(prog_margin_top + k * prog_slot_h)
-                    if pt_winner == 1: x_pos = int(prog_line_x - prog_gap - prog_box_dim); color = "red@0.8"
-                    else: x_pos = int(prog_line_x + prog_line_w + prog_gap); color = "blue@0.8"
-                    box_cmd = f"drawbox=x={x_pos}:y={y_pos}:w={int(prog_box_dim)}:h={int(prog_box_dim)}:color={color}:t=fill"
-                    if k == i:
-                        trigger = max(0, (seg['end'] - seg['start']))
-                        box_cmd += f":enable='gt(t,{trigger})'"
-                    filters.append(box_cmd)
+                    sb_height = int(vid_h * 0.15)
+                    sb_y = vid_h - sb_height
+                    accent_height = max(2, int(vid_h * 0.006))
+                    box_height = int(sb_height * 0.5)
+                    box_width = int(box_height * 1.2)
+                    box_y = sb_y + (sb_height - box_height) // 2
+                    center_x = vid_w // 2
+                    box_t1_x = center_x - box_width
+                    box_t2_x = center_x
+                    font_score = int(box_height * 0.8)
+                    font_team = int(sb_height * 0.25)
+                    text_team_offset_x = int(box_width * 0.2)
+                    prog_margin_top = int(vid_h * 0.05)
+                    prog_available_h = vid_h - prog_margin_top - sb_height - int(vid_h * 0.02)
+                    prog_line_x = int(vid_h * 0.05) + 14
+                    prog_line_w = max(2, int(vid_h * 0.003))
+                    prog_slot_h = min(prog_available_h / total_segs, vid_h * 0.05)
+                    prog_gap = max(1, int(prog_slot_h * 0.1))
+                    prog_box_dim = prog_slot_h - prog_gap
 
-                filters.append(f"drawbox=y={sb_y}:h={sb_height}:w={vid_w}:color=black@0.8:t=fill")
-                filters.append(f"drawbox=y={sb_y}:h={accent_height}:w={vid_w}:color=orange@1:t=fill")
-                filters.append(f"drawbox=x={box_t1_x}:y={box_y}:w={box_width}:h={box_height}:color=red@0.8:t=fill")
-                filters.append(f"drawbox=x={box_t2_x}:y={box_y}:w={box_width}:h={box_height}:color=blue@0.8:t=fill")
+                    filters.append(f"drawbox=x={prog_line_x}:y={prog_margin_top}:w={prog_line_w}:h={int(prog_available_h)}:color=white@1:t=fill")
                 
-                t1_text_x = box_t1_x - text_team_offset_x
-                t2_text_x = box_t2_x + box_width + text_team_offset_x
-                filters.append(f"drawtext=fontfile='{font_path}':text='{seg['t1_name']}':fontcolor=white:fontsize={font_team}:x={t1_text_x}-text_w:y={box_y}+(({box_height}-text_h)/2)")
-                filters.append(f"drawtext=fontfile='{font_path}':text='{seg['t2_name']}':fontcolor=white:fontsize={font_team}:x={t2_text_x}:y={box_y}+(({box_height}-text_h)/2)")
+                    for k in range(i + 1):
+                        pt_winner = all_segments[k]['winner']
+                        if pt_winner == 0: continue
+                        y_pos = int(prog_margin_top + k * prog_slot_h)
+                        if pt_winner == 1: x_pos = int(prog_line_x - prog_gap - prog_box_dim); color = "red@0.8"
+                        else: x_pos = int(prog_line_x + prog_line_w + prog_gap); color = "blue@0.8"
+                        box_cmd = f"drawbox=x={x_pos}:y={y_pos}:w={int(prog_box_dim)}:h={int(prog_box_dim)}:color={color}:t=fill"
+                        if k == i:
+                            trigger = max(0, (seg['end'] - seg['start']))
+                            box_cmd += f":enable='gt(t,{trigger})'"
+                        filters.append(box_cmd)
 
-                trigger_time = max(0, (seg['end'] - seg['start']))
-                if i == 0: prev_s1, prev_s2 = 0, 0
-                else: prev_s1, prev_s2 = all_segments[i-1]['s1'], all_segments[i-1]['s2']
+                    filters.append(f"drawbox=y={sb_y}:h={sb_height}:w={vid_w}:color=black@0.8:t=fill")
+                    filters.append(f"drawbox=y={sb_y}:h={accent_height}:w={vid_w}:color=orange@1:t=fill")
+                    filters.append(f"drawbox=x={box_t1_x}:y={box_y}:w={box_width}:h={box_height}:color=red@0.8:t=fill")
+                    filters.append(f"drawbox=x={box_t2_x}:y={box_y}:w={box_width}:h={box_height}:color=blue@0.8:t=fill")
                 
-                filters.append(f"drawtext=fontfile='{font_path}':text='{prev_s1}':fontcolor=white:fontsize={font_score}:x={box_t1_x}+(({box_width}-text_w)/2):y={box_y}+(({box_height}-text_h)/2):enable='lte(t,{trigger_time})'")
-                filters.append(f"drawtext=fontfile='{font_path}':text='{seg['s1']}':fontcolor=white:fontsize={font_score}:x={box_t1_x}+(({box_width}-text_w)/2):y={box_y}+(({box_height}-text_h)/2):enable='gt(t,{trigger_time})'")
-                filters.append(f"drawtext=fontfile='{font_path}':text='{prev_s2}':fontcolor=white:fontsize={font_score}:x={box_t2_x}+(({box_width}-text_w)/2):y={box_y}+(({box_height}-text_h)/2):enable='lte(t,{trigger_time})'")
-                filters.append(f"drawtext=fontfile='{font_path}':text='{seg['s2']}':fontcolor=white:fontsize={font_score}:x={box_t2_x}+(({box_width}-text_w)/2):y={box_y}+(({box_height}-text_h)/2):enable='gt(t,{trigger_time})'")
+                    t1_text_x = box_t1_x - text_team_offset_x
+                    t2_text_x = box_t2_x + box_width + text_team_offset_x
+                    filters.append(f"drawtext=fontfile='{font_path}':text='{seg['t1_name']}':fontcolor=white:fontsize={font_team}:x={t1_text_x}-text_w:y={box_y}+(({box_height}-text_h)/2)")
+                    filters.append(f"drawtext=fontfile='{font_path}':text='{seg['t2_name']}':fontcolor=white:fontsize={font_team}:x={t2_text_x}:y={box_y}+(({box_height}-text_h)/2)")
+
+                    trigger_time = max(0, (seg['end'] - seg['start']))
+                    if i == 0: prev_s1, prev_s2 = 0, 0
+                    else: prev_s1, prev_s2 = all_segments[i-1]['s1'], all_segments[i-1]['s2']
+                
+                    filters.append(f"drawtext=fontfile='{font_path}':text='{prev_s1}':fontcolor=white:fontsize={font_score}:x={box_t1_x}+(({box_width}-text_w)/2):y={box_y}+(({box_height}-text_h)/2):enable='lte(t,{trigger_time})'")
+                    filters.append(f"drawtext=fontfile='{font_path}':text='{seg['s1']}':fontcolor=white:fontsize={font_score}:x={box_t1_x}+(({box_width}-text_w)/2):y={box_y}+(({box_height}-text_h)/2):enable='gt(t,{trigger_time})'")
+                    filters.append(f"drawtext=fontfile='{font_path}':text='{prev_s2}':fontcolor=white:fontsize={font_score}:x={box_t2_x}+(({box_width}-text_w)/2):y={box_y}+(({box_height}-text_h)/2):enable='lte(t,{trigger_time})'")
+                    filters.append(f"drawtext=fontfile='{font_path}':text='{seg['s2']}':fontcolor=white:fontsize={font_score}:x={box_t2_x}+(({box_width}-text_w)/2):y={box_y}+(({box_height}-text_h)/2):enable='gt(t,{trigger_time})'")
 
                 final_filter_str = ",".join(filters)
                 cmd = [
@@ -440,8 +466,15 @@ def main():
     parser = argparse.ArgumentParser(description="Process video clips from JSON configuration files")
     parser.add_argument('-f', '--file', type=str, help='Path to a single JSON file')
     parser.add_argument('-d', '--directory', type=str, help='Path to a directory containing JSON files')
+    parser.add_argument('-H', '--highlight', action='store_true',
+                        help='Build a highlight reel from the plays marked "highlight" in the JSON, '
+                             'with no scoreboard and no timeline overlay')
 
     args = parser.parse_args()
+
+    if args.highlight and not (args.file or args.directory):
+        print("Error: --highlight requires -f/--file or -d/--directory")
+        sys.exit(1)
 
     # CLI mode: -f or -d specified
     if args.file or args.directory:
@@ -471,13 +504,15 @@ def main():
         sys.stderr = cli_warning_log
 
         n = len(json_files)
-        print(f"Creating videos for a total of {n} game(s)")
+        what = "highlight reels" if args.highlight else "videos"
+        print(f"Creating {what} for a total of {n} game(s)")
 
         # Process each JSON file
+        suffix = "_highlights" if args.highlight else ""
         for idx, json_file in enumerate(json_files, start=1):
-            output_name = os.path.splitext(os.path.basename(json_file))[0] + ".mp4"
+            output_name = os.path.splitext(os.path.basename(json_file))[0] + suffix + ".mp4"
             print(f"\nWorking on {output_name}")
-            run_processing_logic([json_file])
+            run_processing_logic([json_file], highlights_only=args.highlight)
             print(f"Completed {output_name}")
 
         sys.stderr = sys.__stderr__
