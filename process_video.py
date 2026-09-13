@@ -414,8 +414,15 @@ def run_processing_logic(args, highlights_only=False):
                 cmd = [
                     ffmpeg_exe, "-i", downloaded_file,
                     "-vf", final_filter_str,
+                    # The video filter resets the clip's clock (setpts=PTS-STARTPTS),
+                    # so the audio must be re-anchored to that same zero. Copying it
+                    # (-c:a copy) instead preserves the raw clip's AAC priming/offset,
+                    # leaving audio and video misaligned within every clip. Re-encode
+                    # with async resampling so each clip's audio starts exactly at 0.
+                    "-af", "aresample=async=1:first_pts=0",
                     "-c:v", "libx264", "-preset", "ultrafast", "-crf", "26",
-                    "-c:a", "copy", "-y", final_filename
+                    "-c:a", "aac", "-b:a", "128k", "-ar", "48000",
+                    "-y", final_filename
                 ]
                 subprocess.run(cmd, check=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
                 downloaded_clips.append(final_filename)
@@ -434,7 +441,23 @@ def run_processing_logic(args, highlights_only=False):
                     safe_path = os.path.abspath(clip).replace("'", "'\\''")
                     f.write(f"file '{safe_path}'\n")
 
-            cmd_concat = [ffmpeg_exe, "-f", "concat", "-safe", "0", "-i", list_file_path, "-c", "copy", "-y", output_video]
+            # Video concatenates losslessly (-c:v copy), but AAC audio cannot be
+            # stream-copied across clip boundaries: its 1024-sample frames and
+            # per-clip encoder priming never line up at the joins, so ffmpeg emits
+            # "Non-monotonic DTS" warnings and the audio drifts progressively later
+            # with each clip. Re-encoding the audio (async resampling keeps it locked
+            # to the video timeline) removes both the warnings and the drift.
+            # -loglevel warning so the captured stderr holds only real warnings/
+            # errors: otherwise ffmpeg's normal banner trips the had_warnings flag
+            # and every clean run falsely reports "There were warnings from FFmpeg".
+            cmd_concat = [
+                ffmpeg_exe, "-hide_banner", "-loglevel", "warning",
+                "-f", "concat", "-safe", "0", "-i", list_file_path,
+                "-c:v", "copy",
+                "-af", "aresample=async=1",
+                "-c:a", "aac", "-b:a", "128k",
+                "-y", output_video
+            ]
             if cli_mode and cli_warning_log:
                 result = subprocess.run(cmd_concat, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE, text=True)
                 if result.stderr.strip():
