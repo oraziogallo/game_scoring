@@ -11,6 +11,9 @@ every point won by team 2. Under it, a lead chart shows who is ahead after each
 play and by how much: above zero (red) when team 1 leads, below (blue) when
 team 2 does.
 
+Games are stacked by their 'gameOrder' in the JSON; games without one come last,
+by file name.
+
 Where the recording has a gap (a play carrying 'resumeScore' in the JSON), both
 the line and the lead chart break: a dotted stretch marks the points that were
 never recorded, with how many each team scored in the meantime.
@@ -66,9 +69,18 @@ def get_resume_score(seg):
         return None
 
 
+def get_game_order(data):
+    """The optional top-level 'gameOrder': where this game falls among the
+    games of the same set (1, 2, ...), or None."""
+    try:
+        return int(data.get('gameOrder'))
+    except (TypeError, ValueError):
+        return None
+
+
 def parse_game(json_file):
-    """Read one scoring JSON into {'name', 't1', 't2', 'winners', 'leads',
-    's1', 's2', 'xs', 'width', 'breaks'}.
+    """Read one scoring JSON into {'name', 'order', 't1', 't2', 'winners',
+    'leads', 's1', 's2', 'xs', 'width', 'breaks'}.
 
     'winners' has one entry per play, in JSON order: 1, 2, or 0 for a play that
     scored no point. The winner is derived from the score before and after the
@@ -111,6 +123,7 @@ def parse_game(json_file):
 
     return {
         'name': os.path.splitext(os.path.basename(json_file))[0],
+        'order': get_game_order(data),
         't1': data.get('team1', 'Home'),
         't2': data.get('team2', 'Away'),
         'winners': winners,
@@ -337,14 +350,20 @@ def main():
             print(f"Skipping {os.path.basename(json_file)}: no segments")
             continue
         games.append(game)
-        gaps = len(game['breaks'])
-        print(f"{game['name']}: {len(game['winners'])} plays, "
-              f"{game['s1']}-{game['s2']}"
-              + (f", {gaps} gap(s) in the recording" if gaps else ""))
 
     if not games:
         print("Error: No games to plot")
         sys.exit(1)
+
+    # By game order; the sort is stable, so ties and unordered games keep
+    # their file-name order.
+    games.sort(key=lambda g: (g['order'] is None, g['order'] or 0))
+    for game in games:
+        gaps = len(game['breaks'])
+        order = f"#{game['order']} " if game['order'] is not None else ""
+        print(f"{order}{game['name']}: {len(game['winners'])} plays, "
+              f"{game['s1']}-{game['s2']}"
+              + (f", {gaps} gap(s) in the recording" if gaps else ""))
 
     plot_games(games, out_path)
     print(f"\nSaved {len(games)} game(s) to {out_path}")

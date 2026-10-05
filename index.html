@@ -47,6 +47,7 @@
         
         .url-input { flex-grow: 1; min-width: 200px; }
         .team-input { width: 150px; text-align: center; font-weight: bold; }
+        .order-input { width: 70px; text-align: center; }
         
         #team1Name { border-bottom: 3px solid var(--team1-color); }
         #team2Name { border-bottom: 3px solid var(--team2-color); }
@@ -313,6 +314,7 @@
 <body class="shortcuts-active">
 
     <div class="controls-area">
+        <input type="text" id="gameOrder" class="order-input" inputmode="numeric" placeholder="Game #" title="Order of this game among the games of the same set (1, 2, ...). Puts N_ in front of the JSON's and the video's names and sorts the timelines.">
         <input type="text" id="team1Name" class="team-input" value="Home" placeholder="Team 1" oninput="renderSegments()">
         <span style="color:#888; font-weight:bold;">VS</span>
         <input type="text" id="team2Name" class="team-input" value="Away" placeholder="Team 2" oninput="renderSegments()">
@@ -1081,6 +1083,8 @@
                     const data = JSON.parse(e.target.result);
                     if (data.team1) document.getElementById('team1Name').value = data.team1;
                     if (data.team2) document.getElementById('team2Name').value = data.team2;
+                    // Older files have no order: leave the field blank to be filled in
+                    document.getElementById('gameOrder').value = data.gameOrder ?? '';
 
                     segments = data.segments || [];
                     // Normalize any highlight flag written by another tool/version
@@ -1153,7 +1157,13 @@
             let t1Formatted = t1.trim().replace(/\s+/g, '-');
             let t2Formatted = t2.trim().replace(/\s+/g, '-');
             let title = `${t1Formatted}_vs_${t2Formatted}`;
-            
+
+            const orderText = document.getElementById('gameOrder').value.trim();
+            if (orderText && !/^\d+$/.test(orderText)) {
+                alert("Game # must be a whole number (or left empty).");
+                return;
+            }
+
             const data = {
                 mode: currentMode,
                 videoId: currentMode === 'youtube' ? currentVideoId : null,
@@ -1161,13 +1171,15 @@
                 videoPath: currentMode === 'local' ? currentVideoPath : null,
                 team1: t1,
                 team2: t2,
+                // undefined drops the key, so files without an order look as before
+                gameOrder: orderText ? parseInt(orderText, 10) : undefined,
                 segments: segments
             };
             
             const blob = new Blob([JSON.stringify(data, null, 2)], {type : 'application/json'});
             const link = document.createElement('a');
             link.href = URL.createObjectURL(blob);
-            link.download = `${title}.json`;
+            link.download = `${orderText ? parseInt(orderText, 10) + '_' : ''}${title}.json`;
             link.click();
         }
     </script>

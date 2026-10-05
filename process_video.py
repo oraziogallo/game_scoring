@@ -151,6 +151,30 @@ def get_resume_score(seg):
     except (TypeError, KeyError, ValueError):
         return None
 
+def get_game_order(data):
+    """The optional top-level 'gameOrder' the web UI writes: where this game
+    falls among the games of the same set (1, 2, ...). None when unset."""
+    try:
+        return int(data.get('gameOrder'))
+    except (TypeError, ValueError):
+        return None
+
+def output_video_name(json_file, highlights_only=False):
+    """<json name>.mp4, prefixed with 'N_' when the JSON has a game order.
+    The web UI already names ordered JSON files N_..., so the prefix is only
+    added when the name does not start with it."""
+    base = os.path.splitext(os.path.basename(json_file))[0]
+    try:
+        with open(json_file, 'r') as f:
+            order = get_game_order(json.load(f))
+    except (OSError, ValueError, AttributeError):
+        order = None   # unreadable here; run_processing_logic reports it
+    prefix = f"{order}_" if order is not None else ""
+    if base.startswith(prefix):
+        prefix = ""
+    suffix = "_highlights" if highlights_only else ""
+    return f"{prefix}{base}{suffix}.mp4"
+
 def get_video_dimensions(filepath, ffmpeg_exe):
     try:
         cmd = [ffmpeg_exe, "-i", filepath]
@@ -187,7 +211,8 @@ def run_processing_logic(args, highlights_only=False):
             show_error_state("No file dropped.")
             return
 
-        target_arg = args[0]
+        # Absolute, because we chdir into the JSON's folder below
+        target_arg = os.path.abspath(args[0])
         update_gui(5, "Initializing...")
         
         json_file = None
@@ -212,9 +237,7 @@ def run_processing_logic(args, highlights_only=False):
         temp_dir = os.path.join(work_dir, "temp_clips")
         processed_dir = os.path.join(work_dir, "processed_clips")
         list_file_path = os.path.join(work_dir, "ffmpeg_list.txt")
-        base_name = os.path.splitext(os.path.basename(json_file))[0]
-        suffix = "_highlights" if highlights_only else ""
-        output_video = os.path.join(work_dir, f"{base_name}{suffix}.mp4")
+        output_video = os.path.join(work_dir, output_video_name(json_file, highlights_only))
 
         # Permissions Fix
         ffmpeg_exe = get_ffmpeg_path()
@@ -578,9 +601,8 @@ def main():
         print(f"Creating {what} for a total of {n} game(s)")
 
         # Process each JSON file
-        suffix = "_highlights" if args.highlight else ""
         for idx, json_file in enumerate(json_files, start=1):
-            output_name = os.path.splitext(os.path.basename(json_file))[0] + suffix + ".mp4"
+            output_name = output_video_name(json_file, args.highlight)
             print(f"\nWorking on {output_name}")
             run_processing_logic([json_file], highlights_only=args.highlight)
             print(f"Completed {output_name}")

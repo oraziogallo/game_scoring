@@ -1,5 +1,6 @@
 ## Workflow:
 - Define the segments and the score using [this tool](https://oraziogallo.github.io/game_scoring/). Download the JSON file.
+  - When several games belong to the same set, fill in **Game #** (1, 2, ...). It is saved in the JSON as `gameOrder`, both the JSON and the video are named `N_<usual name>`, and `plot_timelines.py` stacks the games in that order. Loading an older JSON leaves Game # blank, ready to fill in.
 - Drag and drop the JSON file on the game_scoring app:
   -  If you used a Youtube video, be patient---it'll take several minutes.
   -  If you worked on a local video it should be fast, but make sure the JSON file is in the same folder as the video it refers to.
