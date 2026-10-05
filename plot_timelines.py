@@ -10,6 +10,10 @@ with a square above the line for every point won by team 1 and below it for
 every point won by team 2. Under it, a lead chart shows who is ahead after each
 play and by how much: above zero (red) when team 1 leads, below (blue) when
 team 2 does.
+
+Where the recording has a gap (a play carrying 'resumeScore' in the JSON), both
+the line and the lead chart break: a dotted stretch marks the points that were
+never recorded, with how many each team scored in the meantime.
 """
 
 import argparse
@@ -43,6 +47,7 @@ BOX_HALF = LINE_W / 2 + GAP + BOX   # half-height of the box strip
 LEAD_H = 3.0                  # the biggest lead in the file reaches this high
 LEAD_GAP = 0.9                # space between the box strip and the lead chart
 LEAD_ALPHA = 0.8
+BREAK_SLOTS = 2.5             # width of a gap in the recording
 GRID_STEP = 5                 # faint reference lines every N points of lead
 PEAK_LABEL_ROOM = 1.1         # space kept for the "+N" / "-N" peak labels
 ROW_PAD = 0.9                 # space above and below each game
@@ -51,12 +56,26 @@ MARGIN_IN = 0.35
 MAX_FIG_W_IN = 26.0
 
 
+def get_resume_score(seg):
+    """The optional 'resumeScore' on the first play after a gap in the
+    recording: the real score just before that play, as (t1, t2), or None."""
+    r = seg.get('resumeScore')
+    try:
+        return int(r['t1']), int(r['t2'])
+    except (TypeError, KeyError, ValueError):
+        return None
+
+
 def parse_game(json_file):
-    """Read one scoring JSON into {'name', 't1', 't2', 'winners', 's1', 's2'}.
+    """Read one scoring JSON into {'name', 't1', 't2', 'winners', 'leads',
+    's1', 's2', 'xs', 'width', 'breaks'}.
 
     'winners' has one entry per play, in JSON order: 1, 2, or 0 for a play that
-    scored no point. The winner is derived from the running score exactly the
-    way process_video.py derives it, so the diagram matches the video.
+    scored no point. The winner is derived from the score before and after the
+    play exactly the way process_video.py derives it, so the diagram matches
+    the video. 'xs' is where each play's slot starts and 'width' where the last
+    one ends. 'breaks' has one entry per gap in the recording: where it starts,
+    the play it comes before, and how many points each team scored unseen.
     """
     with open(json_file, 'r') as f:
         data = json.load(f)
@@ -67,18 +86,28 @@ def parse_game(json_file):
 
     winners = []
     leads = []      # team 1 minus team 2 after each play
+    xs = []
+    breaks = []
+    x = 0.0
     prev_s1, prev_s2 = 0, 0
     for seg in segments:
         score = seg.get('scoreState', {'t1': 0, 't2': 0})
+        resume = get_resume_score(seg)
+        if resume:
+            breaks.append({'x': x, 'k': len(winners),
+                           'd1': resume[0] - prev_s1, 'd2': resume[1] - prev_s2})
+            prev_s1, prev_s2 = resume
+            x += BREAK_SLOTS
         winner = 0
         if score['t1'] > prev_s1:
             winner = 1
-            prev_s1 = score['t1']
         elif score['t2'] > prev_s2:
             winner = 2
-            prev_s2 = score['t2']
+        prev_s1, prev_s2 = score['t1'], score['t2']
         winners.append(winner)
         leads.append(prev_s1 - prev_s2)
+        xs.append(x)
+        x += SLOT
 
     return {
         'name': os.path.splitext(os.path.basename(json_file))[0],
@@ -88,45 +117,63 @@ def parse_game(json_file):
         'leads': leads,
         's1': prev_s1,
         's2': prev_s2,
+        'xs': xs,
+        'width': x,
+        'breaks': breaks,
     }
+
+
+def runs(game):
+    """Index ranges [a, b) of the stretches of plays recorded without a gap."""
+    cuts = [b['k'] for b in game['breaks'] if b['k'] > 0]
+    return list(zip([0] + cuts, cuts + [len(game['winners'])]))
 
 
 def draw_lead_chart(ax, game, y0, scale):
     """Draw the lead-over-time chart with its zero line at height y0.
 
     The lead after play k is drawn across slot k, so each step lines up with
-    the box that caused it. scale is slots per point of lead.
+    the box that caused it. scale is slots per point of lead. The chart is
+    drawn one gap-free run at a time, with only a dotted zero line across
+    each gap in the recording.
     """
-    n = len(game['leads'])
+    xs = np.array(game['xs'])
     leads = np.array(game['leads'], dtype=float)
-    # step='post' holds each value until the next x, so repeat the last one.
-    xs = np.arange(n + 1) * SLOT
-    ys = y0 + np.append(leads, leads[-1]) * scale
+    spans = [(xs[a], xs[b - 1] + SLOT) for a, b in runs(game)]
 
-    ax.fill_between(xs, y0, np.maximum(ys, y0), step='post',
-                    color=T1_COLOR, alpha=LEAD_ALPHA, linewidth=0)
-    ax.fill_between(xs, y0, np.minimum(ys, y0), step='post',
-                    color=T2_COLOR, alpha=LEAD_ALPHA, linewidth=0)
+    for a, b in runs(game):
+        # step='post' holds each value until the next x, so repeat the last one.
+        cx = np.append(xs[a:b], xs[b - 1] + SLOT)
+        cy = y0 + np.append(leads[a:b], leads[b - 1]) * scale
+        ax.fill_between(cx, y0, np.maximum(cy, y0), step='post',
+                        color=T1_COLOR, alpha=LEAD_ALPHA, linewidth=0)
+        ax.fill_between(cx, y0, np.minimum(cy, y0), step='post',
+                        color=T2_COLOR, alpha=LEAD_ALPHA, linewidth=0)
 
     # Reference lines every GRID_STEP points, only on the side(s) the lead
     # actually reached, then the zero line on top.
     for sign, extent in ((1, leads.max()), (-1, -leads.min())):
         for lvl in range(GRID_STEP, int(extent) + 1, GRID_STEP):
-            ax.plot([0, n * SLOT], [y0 + sign * lvl * scale] * 2,
-                    color=MUTED_COLOR, alpha=0.25, linewidth=0.5,
-                    linestyle=(0, (2, 3)))
-    ax.plot([0, n * SLOT], [y0, y0], color=MUTED_COLOR, linewidth=0.6)
+            for sx0, sx1 in spans:
+                ax.plot([sx0, sx1], [y0 + sign * lvl * scale] * 2,
+                        color=MUTED_COLOR, alpha=0.25, linewidth=0.5,
+                        linestyle=(0, (2, 3)))
+    for sx0, sx1 in spans:
+        ax.plot([sx0, sx1], [y0, y0], color=MUTED_COLOR, linewidth=0.6)
+    for br in game['breaks']:
+        ax.plot([br['x'], br['x'] + BREAK_SLOTS], [y0, y0], color=MUTED_COLOR,
+                linewidth=0.6, linestyle=(0, (1, 2)))
 
     # Peak lead for each side, placed at the first play that reached it.
     best1 = leads.max()
     if best1 > 0:
         k = int(np.argmax(leads))
-        ax.text(k * SLOT + SLOT / 2, y0 + best1 * scale + 0.25, f"+{int(best1)}",
+        ax.text(xs[k] + SLOT / 2, y0 + best1 * scale + 0.25, f"+{int(best1)}",
                 color=T1_COLOR, fontsize=6.5, ha='center', va='bottom')
     best2 = leads.min()
     if best2 < 0:
         k = int(np.argmin(leads))
-        ax.text(k * SLOT + SLOT / 2, y0 + best2 * scale - 0.25, f"{int(best2)}",
+        ax.text(xs[k] + SLOT / 2, y0 + best2 * scale - 0.25, f"{int(best2)}",
                 color=T2_COLOR, fontsize=6.5, ha='center', va='top')
 
     ax.text(-0.8, y0, "lead", color=MUTED_COLOR, fontsize=7,
@@ -152,16 +199,34 @@ def row_height(game, scale):
 
 def draw_game(ax, game, top, lead_scale):
     """Draw one game with the top of its row at height `top`."""
-    n = len(game['winners'])
+    xs = game['xs']
     y = top - ROW_PAD - BOX_HALF          # the white line
+    y_t1 = y + LINE_W / 2 + GAP + BOX / 2   # centre of team 1's boxes
+    y_t2 = y - LINE_W / 2 - GAP - BOX / 2   # centre of team 2's boxes
 
-    ax.add_patch(Rectangle((0, y - LINE_W / 2), n * SLOT, LINE_W,
-                           facecolor=LINE_COLOR, edgecolor='none'))
+    for a, b in runs(game):
+        ax.add_patch(Rectangle((xs[a], y - LINE_W / 2), xs[b - 1] + SLOT - xs[a],
+                               LINE_W, facecolor=LINE_COLOR, edgecolor='none'))
+
+    # A gap in the recording: dots instead of the line, and how many points
+    # each team scored while the camera was off, on that team's side.
+    for br in game['breaks']:
+        for d in range(1, 4):
+            ax.add_patch(Rectangle((br['x'] + d * BREAK_SLOTS / 4 - LINE_W / 2,
+                                    y - LINE_W / 2), LINE_W, LINE_W,
+                                   facecolor=LINE_COLOR, edgecolor='none'))
+        cx = br['x'] + BREAK_SLOTS / 2
+        if br['d1']:
+            ax.text(cx, y_t1, f"{br['d1']:+d}", color=T1_COLOR, fontsize=6,
+                    ha='center', va='center')
+        if br['d2']:
+            ax.text(cx, y_t2, f"{br['d2']:+d}", color=T2_COLOR, fontsize=6,
+                    ha='center', va='center')
 
     for k, winner in enumerate(game['winners']):
         if winner == 0:
             continue
-        x = k * SLOT + GAP / 2
+        x = xs[k] + GAP / 2
         if winner == 1:
             ax.add_patch(Rectangle((x, y + LINE_W / 2 + GAP), BOX, BOX,
                                    facecolor=T1_COLOR, edgecolor='none'))
@@ -172,13 +237,13 @@ def draw_game(ax, game, top, lead_scale):
     # Team names sit on the side their points are drawn on, which doubles as
     # the colour key.
     label_x = -0.8
-    ax.text(label_x, y + LINE_W / 2 + GAP + BOX / 2, game['t1'],
+    ax.text(label_x, y_t1, game['t1'],
             color=T1_COLOR, fontsize=8, ha='right', va='center')
-    ax.text(label_x, y - LINE_W / 2 - GAP - BOX / 2, game['t2'],
+    ax.text(label_x, y_t2, game['t2'],
             color=T2_COLOR, fontsize=8, ha='right', va='center')
 
     # Anchored on the dash so the two halves stay symmetric whatever the digits.
-    dash_x = n * SLOT + 2.2
+    dash_x = game['width'] + 2.2
     ax.text(dash_x, y, "-", color=MUTED_COLOR, fontsize=9,
             ha='center', va='center')
     ax.text(dash_x - 0.6, y, f"{game['s1']}", color=T1_COLOR, fontsize=9,
@@ -191,13 +256,12 @@ def draw_game(ax, game, top, lead_scale):
 
 
 def plot_games(games, out_path):
-    max_plays = max(len(g['winners']) for g in games)
     # One scale for every game so leads are comparable across rows.
     max_lead = max(max(abs(l) for l in g['leads']) for g in games)
     lead_scale = LEAD_H / max(1, max_lead)
 
     x0 = -LABEL_SLOTS
-    x1 = max_plays * SLOT + SCORE_SLOTS
+    x1 = max(g['width'] for g in games) + SCORE_SLOTS
     data_w = x1 - x0
     heights = [row_height(g, lead_scale) for g in games]
     data_h = sum(heights)
@@ -273,8 +337,10 @@ def main():
             print(f"Skipping {os.path.basename(json_file)}: no segments")
             continue
         games.append(game)
+        gaps = len(game['breaks'])
         print(f"{game['name']}: {len(game['winners'])} plays, "
-              f"{game['s1']}-{game['s2']}")
+              f"{game['s1']}-{game['s2']}"
+              + (f", {gaps} gap(s) in the recording" if gaps else ""))
 
     if not games:
         print("Error: No games to plot")

@@ -229,6 +229,45 @@
             color: white;
             font-weight: bold;
             margin-left: auto;
+            cursor: pointer;
+        }
+        .score-badge:hover { box-shadow: inset 0 0 0 1px #777; }
+        .score-badge.override { box-shadow: inset 0 0 0 1px var(--accent); }
+        .score-badge input[type="text"] {
+            width: 2.2em;
+            padding: 0 2px;
+            background: #111;
+            border: 1px solid #555;
+            border-radius: 3px;
+            color: white;
+            font: inherit;
+            text-align: center;
+        }
+
+        .reset-btn {
+            background: none;
+            border: none;
+            padding: 0 4px;
+            font-size: 1.05em;
+            line-height: 1;
+            cursor: pointer;
+            color: var(--accent);
+        }
+
+        /* Marks a gap in the recording just before the play that follows */
+        .score-break {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            margin: 2px 0 6px;
+            font-size: 0.75em;
+            color: var(--accent);
+        }
+        .score-break::before, .score-break::after {
+            content: '';
+            flex: 1;
+            border-top: 1px dashed var(--accent);
+            opacity: 0.6;
         }
 
         .segment-controls {
@@ -327,6 +366,7 @@
                 <p><span class="key">↑/↓</span> Skip 5s &nbsp; <span class="key">←/→</span> Skip 2s</p>
                 <p><span class="key">,</span> / <span class="key">.</span> Step 1 frame</p>
                 <p><span class="key">H</span> Mark play as highlight ★</p>
+                <p>Click a play's score to correct it (e.g. after a gap in the recording)</p>
             </div>
 
             <button id="downloadBtn" class="btn-secondary" style="width:100%; margin-top:10px;" onclick="downloadJSON()" disabled>Download JSON</button>
@@ -671,8 +711,7 @@
                 cancelRecordingState();
                 updateStatus("Cancelled.");
             } else if (segments.length > 0) {
-                segments.pop();
-                recalculateScores(); 
+                removeSegment(segments[segments.length - 1]);
                 renderSegments();
                 updateStatus("Last segment deleted.");
             }
@@ -691,6 +730,8 @@
             let s1 = 0;
             let s2 = 0;
             segments.forEach(seg => {
+                // Counting restarts from the corrected score after a gap
+                if (seg.resumeScore) { s1 = seg.resumeScore.t1; s2 = seg.resumeScore.t2; }
                 if(seg.winner === 1) s1++;
                 if(seg.winner === 2) s2++;
                 seg.scoreState = { t1: s1, t2: s2 };
@@ -701,9 +742,19 @@
         }
 
         function deleteSegment(id) {
-            segments = segments.filter(s => s.id !== id);
-            recalculateScores();
+            const seg = segments.find(s => s.id === id);
+            if (seg) removeSegment(seg);
             renderSegments();
+        }
+
+        // A score correction belongs to the gap before its play, not to the
+        // play itself, so deleting the play hands it on to the next one.
+        function removeSegment(seg) {
+            const idx = segments.indexOf(seg);
+            const next = segments[idx + 1];
+            if (seg.resumeScore && next && !next.resumeScore) next.resumeScore = seg.resumeScore;
+            segments.splice(idx, 1);
+            recalculateScores();
         }
         
         function toggleWinner(id) {
@@ -765,6 +816,96 @@
             updateStatus(isHighlighted(target)
                 ? `★ Play #${idx} marked as highlight.`
                 : `Play #${idx} un-marked.`);
+        }
+
+        // --- Score Corrections ---
+        // When the recording stops and restarts, the points played in between
+        // are never seen. The first play after such a gap carries 'resumeScore':
+        // the real score just before that play, from which counting resumes.
+        // Plays without a gap have no such key, so older consumers see nothing new.
+        function normalizeResumeScore(seg) {
+            const r = seg.resumeScore || {};
+            const t1 = parseInt(r.t1, 10), t2 = parseInt(r.t2, 10);
+            if (t1 >= 0 && t2 >= 0) seg.resumeScore = { t1, t2 };
+            else delete seg.resumeScore;
+        }
+
+        function countedScoreBefore(seg) {
+            const idx = segments.indexOf(seg);
+            return idx > 0 ? segments[idx - 1].scoreState : { t1: 0, t2: 0 };
+        }
+
+        // The badge shows the score after the play, so that is what gets typed.
+        // What is stored is the score before it, so the play's own point (and
+        // any later change of winner) still counts on top of the correction.
+        function setScoreAfter(seg, v1, v2) {
+            if (!/^\d+$/.test(v1) || !/^\d+$/.test(v2)) {
+                updateStatus("⚠️ The score must be two whole numbers.");
+                return;
+            }
+            const t1 = parseInt(v1, 10), t2 = parseInt(v2, 10);
+            const before = {
+                t1: t1 - (seg.winner === 1 ? 1 : 0),
+                t2: t2 - (seg.winner === 2 ? 1 : 0)
+            };
+            if (before.t1 < 0 || before.t2 < 0) {
+                const team = document.getElementById(seg.winner === 1 ? 'team1Name' : 'team2Name').value;
+                updateStatus(`⚠️ ${team} won this play, so their score is at least 1.`);
+                return;
+            }
+
+            const old = seg.resumeScore;
+            const counted = countedScoreBefore(seg);
+            // Typing in the score that counting already gives is not a correction
+            if (before.t1 === counted.t1 && before.t2 === counted.t2) delete seg.resumeScore;
+            else seg.resumeScore = before;
+
+            if (JSON.stringify(old) === JSON.stringify(seg.resumeScore)) return;
+            recalculateScores();
+            const idx = segments.indexOf(seg) + 1;
+            updateStatus(seg.resumeScore
+                ? `Score set to ${t1} - ${t2} at play #${idx}.`
+                : `Play #${idx} back to the counted score.`);
+        }
+
+        function clearScoreOverride(id) {
+            const seg = segments.find(s => s.id === id);
+            if (!seg) return;
+            delete seg.resumeScore;
+            recalculateScores();
+            renderSegments();
+            refocusApp();
+            updateStatus(`Score correction removed from play #${segments.indexOf(seg) + 1}.`);
+        }
+
+        // Swap the badge for two inputs. Enter or clicking away saves, Esc cancels.
+        function editScore(id, badge) {
+            const seg = segments.find(s => s.id === id);
+            if (!seg || badge.querySelector('input')) return;
+
+            badge.innerHTML = `
+                <input type="text" inputmode="numeric" value="${seg.scoreState.t1}"> -
+                <input type="text" inputmode="numeric" value="${seg.scoreState.t2}">`;
+            const [in1] = badge.querySelectorAll('input');
+
+            let done = false;
+            const finish = (commit) => {
+                if (done) return;
+                done = true;
+                if (commit) setScoreAfter(seg, ...[...badge.querySelectorAll('input')].map(i => i.value.trim()));
+                renderSegments();
+                refocusApp();
+            };
+            badge.addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') { e.preventDefault(); finish(true); }
+                else if (e.key === 'Escape') { e.preventDefault(); finish(false); }
+            });
+            // Tabbing between the two boxes stays inside the badge
+            badge.addEventListener('focusout', (e) => {
+                if (!badge.contains(e.relatedTarget)) finish(true);
+            });
+            in1.focus();
+            in1.select();
         }
 
         // --- Render ---
@@ -862,14 +1003,27 @@
                 if(seg.winner === 1) winText = "Point: " + document.getElementById('team1Name').value;
                 if(seg.winner === 2) winText = "Point: " + document.getElementById('team2Name').value;
 
+                const r = seg.resumeScore;
+                if (r) {
+                    const counted = countedScoreBefore(seg);
+                    const brk = document.createElement('div');
+                    brk.className = 'score-break';
+                    brk.innerHTML = `<span>gap in recording &middot; ${counted.t1}-${counted.t2} &rarr; ${r.t1}-${r.t2}</span>`;
+                    list.appendChild(brk);
+                }
+                const badgeTitle = r
+                    ? 'Score corrected after a gap in the recording. Click to edit.'
+                    : 'Click to correct the score (e.g. after a gap in the recording)';
+
                 div.innerHTML = `
                     <div class="segment-header">
                         <span class="winner-toggle" onclick="toggleWinner(${seg.id})" title="Click to change winner">
                              #${index + 1} &bull; ${winText} ↻
                         </span>
-                        <span class="score-badge">
+                        <span class="score-badge${r ? ' override' : ''}" onclick="editScore(${seg.id}, this)" title="${badgeTitle}">
                             ${seg.scoreState.t1} - ${seg.scoreState.t2}
                         </span>
+                        ${r ? `<button class="reset-btn" onclick="clearScoreOverride(${seg.id})" title="Undo the score correction">&#x21BA;</button>` : ''}
                         <button class="hl-btn ${hl ? 'on' : ''}" onclick="toggleHighlight(${seg.id})" title="Mark as highlight (H)">${hl ? '\u2605' : '\u2606'}</button>
                         <button class="delete-btn" onclick="deleteSegment(${seg.id})" style="background:none; border:none; color:#888; cursor:pointer;">×</button>
                     </div>
@@ -932,6 +1086,7 @@
                     // Normalize any highlight flag written by another tool/version
                     segments.forEach(seg => {
                         if ('highlight' in seg) setHighlight(seg, isHighlighted(seg));
+                        if ('resumeScore' in seg) normalizeResumeScore(seg);
                     });
 
                     if (data.mode === 'local') {

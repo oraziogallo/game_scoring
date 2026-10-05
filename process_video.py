@@ -16,6 +16,7 @@ import argparse
 from tqdm import tqdm
 
 FINAL_SCORE_EXTRA_SECS = 3  # extra seconds appended to the last segment to show the final score
+GAP_SLOTS = 2               # height of a gap in the recording on the progress line, in plays
 
 # --- GLOBAL GUI VARIABLES ---
 root = None
@@ -140,6 +141,16 @@ def is_highlight(seg):
         return v.strip().lower() in ('yes', 'true', '1')
     return bool(v)
 
+def get_resume_score(seg):
+    """The optional 'resumeScore' field the web UI writes on the first play
+    after a gap in the recording: the real score just before that play, as a
+    (t1, t2) tuple. None for every other play, and for older JSON files."""
+    r = seg.get('resumeScore')
+    try:
+        return int(r['t1']), int(r['t2'])
+    except (TypeError, KeyError, ValueError):
+        return None
+
 def get_video_dimensions(filepath, ffmpeg_exe):
     try:
         cmd = [ffmpeg_exe, "-i", filepath]
@@ -245,21 +256,29 @@ def run_processing_logic(args, highlights_only=False):
             t2_name = data.get('team2', 'Away')
             segments = data.get('segments', [])
             
+            # Both the score before and after each play come from the JSON:
+            # after a gap in the recording the score jumps, so it cannot be
+            # rebuilt by counting points from the start.
             prev_s1, prev_s2 = 0, 0
             for seg in segments:
                 score = seg.get('scoreState', {'t1':0, 't2':0})
+                resume = get_resume_score(seg)
+                if resume: prev_s1, prev_s2 = resume
                 winner = 0
-                if score['t1'] > prev_s1: winner = 1; prev_s1 = score['t1']
-                elif score['t2'] > prev_s2: winner = 2; prev_s2 = score['t2']
+                if score['t1'] > prev_s1: winner = 1
+                elif score['t2'] > prev_s2: winner = 2
 
                 all_segments.append({
                     'video_id': video_id,
                     'start': seg['start'], 'end': seg['end'],
                     't1_name': t1_name.replace(":", "\\:").replace("'", ""),
                     't2_name': t2_name.replace(":", "\\:").replace("'", ""),
+                    'prev_s1': prev_s1, 'prev_s2': prev_s2,
                     's1': score['t1'], 's2': score['t2'], 'winner': winner,
+                    'after_gap': resume is not None,
                     'highlight': is_highlight(seg)
                 })
+                prev_s1, prev_s2 = score['t1'], score['t2']
 
         if not all_segments:
             show_error_state("No segments in JSON.")
@@ -276,6 +295,19 @@ def run_processing_logic(args, highlights_only=False):
                 print(f"Found {len(all_segments)} highlight play(s)")
 
         total_segs = len(all_segments)
+
+        # Where each play sits on the progress line, counted in plays: one
+        # slot per play, plus an empty stretch before every play that
+        # resumes after a gap in the recording.
+        play_slot, gap_slots = [], []   # gap_slots: (slot, index of the play after the gap)
+        slot = 0
+        for k, s in enumerate(all_segments):
+            if s['after_gap']:
+                gap_slots.append((slot, k))
+                slot += GAP_SLOTS
+            play_slot.append(slot)
+            slot += 1
+        total_slots = slot
 
         os.makedirs(temp_dir, exist_ok=True)
         os.makedirs(processed_dir, exist_ok=True)
@@ -373,16 +405,32 @@ def run_processing_logic(args, highlights_only=False):
                     prog_available_h = vid_h - prog_margin_top - sb_height - int(vid_h * 0.02)
                     prog_line_x = int(vid_h * 0.05) + 14
                     prog_line_w = max(2, int(vid_h * 0.003))
-                    prog_slot_h = min(prog_available_h / total_segs, vid_h * 0.05)
+                    prog_slot_h = min(prog_available_h / total_slots, vid_h * 0.05)
                     prog_gap = max(1, int(prog_slot_h * 0.1))
                     prog_box_dim = prog_slot_h - prog_gap
 
-                    filters.append(f"drawbox=x={prog_line_x}:y={prog_margin_top}:w={prog_line_w}:h={int(prog_available_h)}:color=white@1:t=fill")
-                
+                    # The line is cut at every gap in the recording the game
+                    # has reached so far, and dots bridge the missing points.
+                    line_y = prog_margin_top
+                    line_end = prog_margin_top + int(prog_available_h)
+                    for g_slot, g_play in gap_slots:
+                        if g_play > i: break
+                        g_top = int(prog_margin_top + g_slot * prog_slot_h)
+                        g_h = GAP_SLOTS * prog_slot_h
+                        if g_top > line_y:
+                            filters.append(f"drawbox=x={prog_line_x}:y={line_y}:w={prog_line_w}:h={g_top - line_y}:color=white@1:t=fill")
+                        n_dots = max(1, min(3, int(g_h / (2 * prog_line_w)) - 1))
+                        for d in range(n_dots):
+                            dot_y = int(g_top + (d + 1) * g_h / (n_dots + 1) - prog_line_w / 2)
+                            filters.append(f"drawbox=x={prog_line_x}:y={dot_y}:w={prog_line_w}:h={prog_line_w}:color=white@1:t=fill")
+                        line_y = int(g_top + g_h)
+                    if line_end > line_y:
+                        filters.append(f"drawbox=x={prog_line_x}:y={line_y}:w={prog_line_w}:h={line_end - line_y}:color=white@1:t=fill")
+
                     for k in range(i + 1):
                         pt_winner = all_segments[k]['winner']
                         if pt_winner == 0: continue
-                        y_pos = int(prog_margin_top + k * prog_slot_h)
+                        y_pos = int(prog_margin_top + play_slot[k] * prog_slot_h)
                         if pt_winner == 1: x_pos = int(prog_line_x - prog_gap - prog_box_dim); color = "red@0.8"
                         else: x_pos = int(prog_line_x + prog_line_w + prog_gap); color = "blue@0.8"
                         box_cmd = f"drawbox=x={x_pos}:y={y_pos}:w={int(prog_box_dim)}:h={int(prog_box_dim)}:color={color}:t=fill"
@@ -402,9 +450,8 @@ def run_processing_logic(args, highlights_only=False):
                     filters.append(f"drawtext=fontfile='{font_path}':text='{seg['t2_name']}':fontcolor=white:fontsize={font_team}:x={t2_text_x}:y={box_y}+(({box_height}-text_h)/2)")
 
                     trigger_time = max(0, (seg['end'] - seg['start']))
-                    if i == 0: prev_s1, prev_s2 = 0, 0
-                    else: prev_s1, prev_s2 = all_segments[i-1]['s1'], all_segments[i-1]['s2']
-                
+                    prev_s1, prev_s2 = seg['prev_s1'], seg['prev_s2']
+
                     filters.append(f"drawtext=fontfile='{font_path}':text='{prev_s1}':fontcolor=white:fontsize={font_score}:x={box_t1_x}+(({box_width}-text_w)/2):y={box_y}+(({box_height}-text_h)/2):enable='lte(t,{trigger_time})'")
                     filters.append(f"drawtext=fontfile='{font_path}':text='{seg['s1']}':fontcolor=white:fontsize={font_score}:x={box_t1_x}+(({box_width}-text_w)/2):y={box_y}+(({box_height}-text_h)/2):enable='gt(t,{trigger_time})'")
                     filters.append(f"drawtext=fontfile='{font_path}':text='{prev_s2}':fontcolor=white:fontsize={font_score}:x={box_t2_x}+(({box_width}-text_w)/2):y={box_y}+(({box_height}-text_h)/2):enable='lte(t,{trigger_time})'")
